@@ -44,8 +44,6 @@ interface ShopifyStats {
 }
 
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyStats> {
-  console.log("🔥 FETCH ORDERS FOR SHOP:", shop);
-
   try {
     const res = await admin.graphql(ORDERS_QUERY);
     const data = (await res.json()) as {
@@ -64,9 +62,8 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       errors?: { message?: string }[];
     };
 
-    console.log("ORDERS RESPONSE:", JSON.stringify(data, null, 2));
-
     if (data.errors?.length) {
+      console.error(`[Dashboard] GraphQL error (${shop}):`, JSON.stringify(data.errors));
       const isScope = data.errors.some(
         (e) =>
           e.message?.toLowerCase().includes("access denied") ||
@@ -87,19 +84,17 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       orderCount++;
     }
 
-    console.log("ORDERS COUNT:", orderCount);
-    console.log("TOTAL CA:", totalRevenue);
+    console.log(`[Dashboard] ${shop} — ${orderCount} commandes, CA ${totalRevenue.toFixed(2)} €`);
 
     return { totalRevenue, totalShipping: 0, orderCount, scopeError: false };
   } catch (err) {
-    console.error("ORDERS ERROR:", err);
+    console.error(`[Dashboard] fetchShopifyOrders error (${shop}):`, err);
     return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
   }
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  console.log("🔥 SHOP UTILISÉ:", session.shop);
 
   const [shopify, achatAgg, depenseAgg, creatorAgg, nbContents] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
@@ -134,8 +129,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const totalDepense = totalAchats + totalDepenses + totalFraisLivraison + totalFraisUgc;
   const margeBrute = ca - totalAchats - totalFraisLivraison;
   const margeNette = ca - totalDepense;
-
-  console.log("RETURN DATA:", { totalRevenue: ca, orderCount: nbCommandes });
 
   return {
     ca,
@@ -464,7 +457,6 @@ function CountCard({ label, value, icon }: CountCardProps) {
 
 export default function Dashboard() {
   const d = useLoaderData<typeof loader>();
-  console.log("FRONTEND DATA:", d);
 
   const g3: React.CSSProperties = {
     display: "grid",
@@ -494,8 +486,6 @@ export default function Dashboard() {
       }}
     >
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
-
-        <pre style={{ fontSize: 11, background: "#1e1e1e", color: "#d4d4d4", padding: 12, borderRadius: 8, marginBottom: 20, overflow: "auto" }}>{JSON.stringify(d, null, 2)}</pre>
 
         {d.scopeError && (
           <div
