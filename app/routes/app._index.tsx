@@ -157,11 +157,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const resultatNet         = ca - totalDepense;
   const margeNettePct       = ca > 0 ? (resultatNet / ca) * 100 : 0;
   const coutParCommande     = nbCommandes > 0 ? totalDepense / nbCommandes : 0;
+  const profitParCommande   = nbCommandes > 0 ? resultatNet / nbCommandes : 0;
+  const roas                = marketingCosts > 0 ? ca / marketingCosts : 0;
 
-  // Seuil de rentabilité (commandes nécessaires pour couvrir les charges fixes)
-  const chargesFixees       = marketingCosts + totalDepenses + totalFraisUgc;
+  // Seuil de rentabilité : nb commandes pour couvrir le marketing seul
   const margeVariableParCmd = nbCommandes > 0 ? (ca - totalCOGS - totalFraisLivraison) / nbCommandes : 0;
-  const seuilRentabilite    = margeVariableParCmd > 0 ? Math.ceil(chargesFixees / margeVariableParCmd) : 0;
+  const seuilRentabilite    = margeVariableParCmd > 0 ? Math.ceil(marketingCosts / margeVariableParCmd) : 0;
 
   // ── Stock ─────────────────────────────────────────────────────────────────────
   const potsVendus          = shopify.totalPotsVendus;
@@ -173,7 +174,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     ca, nbCommandes, panierMoyen,
     totalCOGS, totalFraisLivraison, marketingCosts, totalDepenses, totalFraisUgc,
-    totalDepense, resultatNet, margeNettePct, coutParCommande, seuilRentabilite,
+    totalDepense, resultatNet, margeNettePct, coutParCommande, profitParCommande, roas, seuilRentabilite,
     stockTotalCost, stockInitialPots, stockConsomme, stockRestantValeur, potsVendus, potsRestants, stockPctEcoule,
     nbCreateurs: creatorAgg._count._all ?? 0,
     nbContents:  nbContents ?? 0,
@@ -358,15 +359,37 @@ export default function Dashboard() {
                 sub={`Marge nette : ${d.margeNettePct.toFixed(1)} %${d.margeNettePct > 0 && d.margeNettePct < 10 ? " ⚠️ < 10 %" : ""}`} />
             </div>
 
-            {/* Métriques commandes */}
-            <div className="dash-grid-4" style={{ marginBottom: 14 }}>
+            {/* Métriques commandes — ligne 1 */}
+            <div className="dash-grid-3" style={{ marginBottom: 10 }}>
               <MetricCard label="Panier moyen" value={eur(d.panierMoyen)} sub="par commande" />
+              <MetricCard label="Profit / commande" value={eur(d.profitParCommande)}
+                sub="résultat net ÷ commandes"
+                valueColor={d.profitParCommande < 0 ? T.red : T.green} />
               <MetricCard label="Marge nette" value={d.margeNettePct.toFixed(1) + " %"}
                 valueColor={d.margeNettePct < 0 ? T.red : d.margeNettePct < 10 ? T.orange : T.green} />
-              <MetricCard label="Coût / commande" value={eur(d.coutParCommande)} valueColor={T.red} />
-              <MetricCard label="Seuil rentabilité" value={d.seuilRentabilite > 0 ? `${d.seuilRentabilite} cmd` : "—"}
-                sub={d.seuilRentabilite > 0 ? d.nbCommandes >= d.seuilRentabilite ? "✓ Atteint" : `${d.seuilRentabilite - d.nbCommandes} cmd restantes` : undefined}
-                valueColor={d.nbCommandes >= d.seuilRentabilite && d.seuilRentabilite > 0 ? T.green : T.orange} />
+            </div>
+
+            {/* Métriques commandes — ligne 2 */}
+            <div className="dash-grid-3" style={{ marginBottom: 14 }}>
+              <MetricCard
+                label="ROAS"
+                value={d.roas > 0 ? "×" + d.roas.toFixed(2) : "—"}
+                sub={`CA ${eur(d.ca)} ÷ Ads ${eur(d.marketingCosts)}`}
+                valueColor={d.roas >= 2 ? T.green : d.roas >= 1 ? T.orange : T.red}
+                accentTop
+              />
+              <MetricCard label="Coût / commande" value={eur(d.coutParCommande)}
+                sub="total dépensé ÷ commandes" valueColor={T.red} />
+              <MetricCard
+                label="Seuil marketing (cmd)"
+                value={d.seuilRentabilite > 0 ? `${d.seuilRentabilite} cmd` : "—"}
+                sub={d.seuilRentabilite > 0
+                  ? d.nbCommandes >= d.seuilRentabilite
+                    ? `✓ Atteint (${d.nbCommandes} / ${d.seuilRentabilite})`
+                    : `${d.seuilRentabilite - d.nbCommandes} cmd restantes`
+                  : undefined}
+                valueColor={d.nbCommandes >= d.seuilRentabilite && d.seuilRentabilite > 0 ? T.green : T.orange}
+              />
             </div>
 
             {/* Détail coûts */}
