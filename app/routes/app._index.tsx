@@ -168,22 +168,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ),
   ]);
 
+  const marketingCosts = 731.59;
+
   const ca = shopify.totalRevenue;
   const nbCommandes = shopify.orderCount;
   const totalFraisLivraison = shopify.totalShipping;
   const totalAchats = achatAgg._sum.coutTotalTTC ?? 0;
   const totalDepenses = depenseAgg._sum.montantTTC ?? 0;
   const totalFraisUgc = creatorAgg._sum.coutTotalCollab ?? 0;
-  const totalDepense = totalAchats + totalDepenses + totalFraisLivraison + totalFraisUgc;
+  const totalDepense = totalAchats + totalDepenses + totalFraisLivraison + totalFraisUgc + marketingCosts;
   const margeBrute = ca - totalAchats - totalFraisLivraison;
   const margeNette = ca - totalDepense;
-
-  console.log("FINAL COSTS:", totalDepense.toFixed(2), "NET:", margeNette.toFixed(2));
 
   return {
     ca,
     nbCommandes,
     panierMoyen: nbCommandes > 0 ? ca / nbCommandes : 0,
+    marketingCosts,
     totalAchats,
     totalDepenses,
     totalFraisUgc,
@@ -635,31 +636,42 @@ export default function Dashboard() {
         {/* Coûts */}
         <section style={{ marginBottom: 36 }}>
           <SectionLabel>Coûts</SectionLabel>
-          <div style={g4}>
-            <MetricCard
-              label="Achats marchandise"
-              value={eur(d.totalAchats)}
-              sub={pct(d.totalAchats, d.ca) ? pct(d.totalAchats, d.ca) + " du CA" : undefined}
-              valueColor={T.red}
-            />
-            <MetricCard
-              label="Dépenses annexes"
-              value={eur(d.totalDepenses)}
-              sub={pct(d.totalDepenses, d.ca) ? pct(d.totalDepenses, d.ca) + " du CA" : undefined}
-              valueColor={T.red}
-            />
-            <MetricCard
-              label="Frais livraison"
-              value={eur(d.totalFraisLivraison)}
-              sub={pct(d.totalFraisLivraison, d.ca) ? pct(d.totalFraisLivraison, d.ca) + " du CA" : undefined}
-              valueColor={T.red}
-            />
-            <MetricCard
-              label="Frais UGC"
-              value={eur(d.totalFraisUgc)}
-              sub={pct(d.totalFraisUgc, d.ca) ? pct(d.totalFraisUgc, d.ca) + " du CA" : undefined}
-              valueColor={T.red}
-            />
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={g3}>
+              <MetricCard
+                label="Marketing"
+                value={eur(d.marketingCosts)}
+                sub={pct(d.marketingCosts, d.ca) ? pct(d.marketingCosts, d.ca) + " du CA" : undefined}
+                valueColor={T.red}
+                accent
+              />
+              <MetricCard
+                label="Achats marchandise"
+                value={eur(d.totalAchats)}
+                sub={pct(d.totalAchats, d.ca) ? pct(d.totalAchats, d.ca) + " du CA" : undefined}
+                valueColor={T.red}
+              />
+              <MetricCard
+                label="Frais livraison"
+                value={eur(d.totalFraisLivraison)}
+                sub={pct(d.totalFraisLivraison, d.ca) ? pct(d.totalFraisLivraison, d.ca) + " du CA" : undefined}
+                valueColor={T.red}
+              />
+            </div>
+            <div style={g2}>
+              <MetricCard
+                label="Frais UGC"
+                value={eur(d.totalFraisUgc)}
+                sub={pct(d.totalFraisUgc, d.ca) ? pct(d.totalFraisUgc, d.ca) + " du CA" : undefined}
+                valueColor={T.red}
+              />
+              <MetricCard
+                label="Dépenses annexes"
+                value={eur(d.totalDepenses)}
+                sub={pct(d.totalDepenses, d.ca) ? pct(d.totalDepenses, d.ca) + " du CA" : undefined}
+                valueColor={T.red}
+              />
+            </div>
           </div>
         </section>
 
