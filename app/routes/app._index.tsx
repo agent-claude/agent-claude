@@ -198,24 +198,34 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const stockInitialPots = 200;
   const stockTotalCost   = 1830.24;
 
-  // ── P&L ──────────────────────────────────────────────────────────────────────
+  const totalDepenses       = depenseAgg._sum.montantTTC ?? 0;
+  const totalFraisUgc       = creatorAgg._sum.coutTotalCollab ?? 0;
+
+  // ── Bloc 1 : Résultat business (hors ads) ────────────────────────────────────
   const ca                  = shopify.totalRevenue;
   const nbCommandes         = shopify.orderCount;
   const panierMoyen         = nbCommandes > 0 ? ca / nbCommandes : 0;
   const totalCOGS           = shopify.totalProductCost;
   const totalFraisLivraison = shopify.totalShipping;
-  const totalDepenses       = depenseAgg._sum.montantTTC ?? 0;
-  const totalFraisUgc       = creatorAgg._sum.coutTotalCollab ?? 0;
-  const totalDepense        = totalCOGS + totalDepenses + totalFraisLivraison + totalFraisUgc + marketingCosts;
-  const resultatNet         = ca - totalDepense;
-  const margeNettePct       = ca > 0 ? (resultatNet / ca) * 100 : 0;
-  const coutParCommande     = nbCommandes > 0 ? totalDepense / nbCommandes : 0;
-  const profitParCommande   = nbCommandes > 0 ? resultatNet / nbCommandes : 0;
-  const roas                = marketingCosts > 0 ? ca / marketingCosts : 0;
+  const coutsDirects        = totalCOGS + totalFraisLivraison;
+  const resultatBusiness    = ca - coutsDirects;
+  const margeBusinessPct    = ca > 0 ? (resultatBusiness / ca) * 100 : 0;
+  const profitParCommande   = nbCommandes > 0 ? resultatBusiness / nbCommandes : 0;
 
-  // Seuil de rentabilité : nb commandes pour couvrir le marketing seul
-  const margeVariableParCmd = nbCommandes > 0 ? (ca - totalCOGS - totalFraisLivraison) / nbCommandes : 0;
-  const seuilRentabilite    = margeVariableParCmd > 0 ? Math.ceil(marketingCosts / margeVariableParCmd) : 0;
+  // ── Bloc 2 : Marketing Ads ────────────────────────────────────────────────────
+  // Aucune commande générée via les ads → ROAS réel = 0
+  const perteAds            = -marketingCosts;
+
+  // Seuil : nb commandes nécessaires pour rentabiliser les ads
+  const margeParCmd         = nbCommandes > 0 ? resultatBusiness / nbCommandes : 0;
+  const seuilMarketing      = margeParCmd > 0 ? Math.ceil(marketingCosts / margeParCmd) : 0;
+
+  // ── Bloc 3 : Résultat global ──────────────────────────────────────────────────
+  const autresCharges       = totalDepenses + totalFraisUgc;
+  const totalChargesGlobal  = coutsDirects + marketingCosts + autresCharges;
+  const resultatGlobal      = ca - totalChargesGlobal;
+  const margeGlobalePct     = ca > 0 ? (resultatGlobal / ca) * 100 : 0;
+  const coutParCommande     = nbCommandes > 0 ? totalChargesGlobal / nbCommandes : 0;
 
   // ── Stock ─────────────────────────────────────────────────────────────────────
   const potsVendus          = shopify.totalPotsVendus;
@@ -225,10 +235,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const stockPctEcoule      = stockInitialPots > 0 ? (potsVendus / stockInitialPots) * 100 : 0;
 
   return {
-    ca, nbCommandes, panierMoyen,
-    totalCOGS, totalFraisLivraison, marketingCosts, totalDepenses, totalFraisUgc,
-    totalDepense, resultatNet, margeNettePct, coutParCommande, profitParCommande, roas, seuilRentabilite,
-    stockTotalCost, stockInitialPots, stockConsomme, stockRestantValeur, potsVendus, potsRestants, stockPctEcoule,
+    // Commun
+    ca, nbCommandes, panierMoyen, totalCOGS, totalFraisLivraison,
+    // Bloc 1
+    coutsDirects, resultatBusiness, margeBusinessPct, profitParCommande,
+    // Bloc 2
+    marketingCosts, perteAds, seuilMarketing,
+    // Bloc 3
+    totalDepenses, totalFraisUgc, autresCharges,
+    totalChargesGlobal, resultatGlobal, margeGlobalePct, coutParCommande,
+    // Stock
+    stockTotalCost, stockInitialPots, stockConsomme, stockRestantValeur,
+    potsVendus, potsRestants, stockPctEcoule,
+    // Autres
     nbCreateurs: creatorAgg._count._all ?? 0,
     nbContents:  nbContents ?? 0,
     orderBreakdowns: shopify.orderBreakdowns,
@@ -373,9 +392,10 @@ function HeroCard({ label, value, forceColor, alert, sub }: HeroCardProps) {
 export default function Dashboard() {
   const d = useLoaderData<typeof loader>();
 
-  // Alerte résultat net
-  const netAlert: "green" | "orange" | "red" =
-    d.resultatNet < 0 ? "red" : d.margeNettePct < 10 ? "orange" : "green";
+  const businessAlert: "green" | "orange" | "red" =
+    d.resultatBusiness < 0 ? "red" : d.margeBusinessPct < 10 ? "orange" : "green";
+  const globalAlert: "green" | "orange" | "red" =
+    d.resultatGlobal < 0 ? "red" : d.margeGlobalePct < 10 ? "orange" : "green";
 
   return (
     <>
@@ -401,70 +421,86 @@ export default function Dashboard() {
             </span>
           </div>
 
-          {/* ══ BLOC A — RENTABILITÉ RÉELLE ══════════════════════════════════ */}
+          {/* ══ BLOC 1 — RÉSULTAT BUSINESS (HORS ADS) ════════════════════════ */}
           <section style={{ marginBottom: 48 }}>
-            <SectionLabel>Rentabilité réelle</SectionLabel>
+            <SectionLabel>Résultat business — hors ads</SectionLabel>
 
-            {/* Hero : CA / Total dépensé / Résultat net */}
             <div className="dash-grid-3" style={{ marginBottom: 14 }}>
-              <HeroCard label="Chiffre d'affaires" value={d.ca} forceColor="green" sub={`${d.nbCommandes} commandes`} />
-              <HeroCard label="Total dépensé" value={d.totalDepense} forceColor="red" sub={`Coût par commande : ${eur(d.coutParCommande)}`} />
-              <HeroCard label="Résultat net" value={d.resultatNet} alert={netAlert}
-                sub={`Marge nette : ${d.margeNettePct.toFixed(1)} %${d.margeNettePct > 0 && d.margeNettePct < 10 ? " ⚠️ < 10 %" : ""}`} />
+              <HeroCard label="Chiffre d'affaires" value={d.ca} forceColor="green"
+                sub={`${d.nbCommandes} commandes · panier ${eur(d.panierMoyen)}`} />
+              <HeroCard label="Coûts directs" value={d.coutsDirects} forceColor="red"
+                sub={`COGS ${eur(d.totalCOGS)} + livraison ${eur(d.totalFraisLivraison)}`} />
+              <HeroCard label="Résultat business" value={d.resultatBusiness} alert={businessAlert}
+                sub={`Marge brute : ${d.margeBusinessPct.toFixed(1)} %`} />
             </div>
 
-            {/* Métriques commandes — ligne 1 */}
-            <div className="dash-grid-3" style={{ marginBottom: 10 }}>
-              <MetricCard label="Panier moyen" value={eur(d.panierMoyen)} sub="par commande" />
-              <MetricCard label="Profit / commande" value={eur(d.profitParCommande)}
-                sub="résultat net ÷ commandes"
-                valueColor={d.profitParCommande < 0 ? T.red : T.green} />
-              <MetricCard label="Marge nette" value={d.margeNettePct.toFixed(1) + " %"}
-                valueColor={d.margeNettePct < 0 ? T.red : d.margeNettePct < 10 ? T.orange : T.green} />
-            </div>
-
-            {/* Métriques commandes — ligne 2 */}
-            <div className="dash-grid-3" style={{ marginBottom: 14 }}>
-              <MetricCard
-                label="ROAS"
-                value={d.roas > 0 ? "×" + d.roas.toFixed(2) : "—"}
-                sub={`CA ${eur(d.ca)} ÷ Ads ${eur(d.marketingCosts)}`}
-                valueColor={d.roas >= 2 ? T.green : d.roas >= 1 ? T.orange : T.red}
-                accentTop
-              />
-              <MetricCard label="Coût / commande" value={eur(d.coutParCommande)}
-                sub="total dépensé ÷ commandes" valueColor={T.red} />
-              <MetricCard
-                label="Seuil marketing (cmd)"
-                value={d.seuilRentabilite > 0 ? `${d.seuilRentabilite} cmd` : "—"}
-                sub={d.seuilRentabilite > 0
-                  ? d.nbCommandes >= d.seuilRentabilite
-                    ? `✓ Atteint (${d.nbCommandes} / ${d.seuilRentabilite})`
-                    : `${d.seuilRentabilite - d.nbCommandes} cmd restantes`
-                  : undefined}
-                valueColor={d.nbCommandes >= d.seuilRentabilite && d.seuilRentabilite > 0 ? T.green : T.orange}
-              />
-            </div>
-
-            {/* Détail coûts */}
-            <div className="dash-grid-3" style={{ marginBottom: 14 }}>
-              <MetricCard label="Coût produits vendus (COGS)" value={eur(d.totalCOGS)}
-                sub={pctStr(d.totalCOGS, d.ca) ? pctStr(d.totalCOGS, d.ca) + " du CA" : undefined}
-                valueColor={T.red} />
+            <div className="dash-grid-3">
+              <MetricCard label="COGS (coût produits)" value={eur(d.totalCOGS)}
+                sub={pctStr(d.totalCOGS, d.ca) + " du CA"} valueColor={T.red} />
               <MetricCard label="Frais livraison" value={eur(d.totalFraisLivraison)}
-                sub={pctStr(d.totalFraisLivraison, d.ca) ? pctStr(d.totalFraisLivraison, d.ca) + " du CA" : undefined}
-                valueColor={T.red} />
-              <MetricCard label="Marketing Ads" value={eur(d.marketingCosts)}
-                sub={pctStr(d.marketingCosts, d.ca) ? pctStr(d.marketingCosts, d.ca) + " du CA" : undefined}
-                valueColor={T.red} accentTop />
+                sub={pctStr(d.totalFraisLivraison, d.ca) + " du CA"} valueColor={T.red} />
+              <MetricCard label="Profit / commande" value={eur(d.profitParCommande)}
+                sub="résultat business ÷ commandes"
+                valueColor={d.profitParCommande < 0 ? T.red : T.green} />
             </div>
+          </section>
+
+          <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
+
+          {/* ══ BLOC 2 — MARKETING ADS ═══════════════════════════════════════ */}
+          <section style={{ marginBottom: 48 }}>
+            <SectionLabel>Marketing Ads (Meta)</SectionLabel>
+
+            <div className="dash-grid-3" style={{ marginBottom: 14 }}>
+              <HeroCard label="Dépenses ads" value={d.marketingCosts} forceColor="red"
+                sub="Budget Meta Ads total" />
+              <div style={{ background: T.orangeBg, border: `2px solid ${T.orangeBdr}`, borderRadius: 18, padding: "20px 20px 18px", display: "flex", flexDirection: "column", gap: 6, boxShadow: "0 4px 12px rgba(0,0,0,0.08)", minWidth: 0 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: T.orange, opacity: 0.75 }}>ROAS réel</span>
+                <span className="hero-val" style={{ fontWeight: 800, lineHeight: 1.1, color: T.orange, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>×0.00</span>
+                <span style={{ fontSize: 13, color: T.orange, opacity: 0.75, marginTop: 2 }}>0 commande générée via ads</span>
+              </div>
+              <HeroCard label="Perte ads nette" value={d.perteAds} alert="red"
+                sub="Aucun CA attribuable aux ads" />
+            </div>
+
             <div className="dash-grid-2">
-              <MetricCard label="Dépenses annexes" value={eur(d.totalDepenses)}
-                sub={pctStr(d.totalDepenses, d.ca) ? pctStr(d.totalDepenses, d.ca) + " du CA" : undefined}
-                valueColor={T.red} />
-              <MetricCard label="Frais UGC" value={eur(d.totalFraisUgc)}
-                sub={pctStr(d.totalFraisUgc, d.ca) ? pctStr(d.totalFraisUgc, d.ca) + " du CA" : undefined}
-                valueColor={T.red} />
+              <MetricCard
+                label="Seuil rentabilité ads"
+                value={d.seuilMarketing > 0 ? `${d.seuilMarketing} cmd` : "—"}
+                sub={d.seuilMarketing > 0
+                  ? `${d.seuilMarketing - d.nbCommandes} cmd supplémentaires pour rentabiliser les ads`
+                  : undefined}
+                valueColor={T.orange}
+              />
+              <MetricCard label="Coût ads / commande actuelle" value={eur(d.marketingCosts / Math.max(d.nbCommandes, 1))}
+                sub="si ads attribuées à toutes les commandes" valueColor={T.red} />
+            </div>
+          </section>
+
+          <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
+
+          {/* ══ BLOC 3 — RÉSULTAT GLOBAL ══════════════════════════════════════ */}
+          <section style={{ marginBottom: 48 }}>
+            <SectionLabel>Résultat global (toutes charges)</SectionLabel>
+
+            <div className="dash-grid-3" style={{ marginBottom: 14 }}>
+              <HeroCard label="Chiffre d'affaires" value={d.ca} forceColor="green"
+                sub={`${d.nbCommandes} commandes`} />
+              <HeroCard label="Total charges" value={d.totalChargesGlobal} forceColor="red"
+                sub={`Coût par commande : ${eur(d.coutParCommande)}`} />
+              <HeroCard label="Résultat global" value={d.resultatGlobal} alert={globalAlert}
+                sub={`Marge nette : ${d.margeGlobalePct.toFixed(1)} %`} />
+            </div>
+
+            <div className="dash-grid-4">
+              <MetricCard label="COGS" value={eur(d.totalCOGS)}
+                sub={pctStr(d.totalCOGS, d.ca) + " du CA"} valueColor={T.red} />
+              <MetricCard label="Livraison" value={eur(d.totalFraisLivraison)}
+                sub={pctStr(d.totalFraisLivraison, d.ca) + " du CA"} valueColor={T.red} />
+              <MetricCard label="Ads Meta" value={eur(d.marketingCosts)}
+                sub={pctStr(d.marketingCosts, d.ca) + " du CA"} valueColor={T.red} accentTop />
+              <MetricCard label="Autres charges" value={eur(d.autresCharges)}
+                sub={`Annexes ${eur(d.totalDepenses)} + UGC ${eur(d.totalFraisUgc)}`} valueColor={T.red} />
             </div>
           </section>
 
