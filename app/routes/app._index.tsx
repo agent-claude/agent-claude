@@ -42,17 +42,11 @@ interface ShopifyStats {
 }
 
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyStats> {
-  console.log(`[Dashboard] shop=${shop} — récupération des 50 dernières commandes`);
+  console.log("SHOP:", shop);
 
   try {
     const res = await admin.graphql(ORDERS_QUERY);
-
-    if (!res.ok) {
-      console.error(`[Dashboard] HTTP ${res.status} ${res.statusText}`);
-      return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
-    }
-
-    const body = (await res.json()) as {
+    const data = (await res.json()) as {
       data?: {
         orders?: {
           edges: {
@@ -66,25 +60,20 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       errors?: { message?: string }[];
     };
 
-    if (body.errors?.length) {
-      console.error(`[Dashboard] GraphQL errors:`, JSON.stringify(body.errors));
-      const isScope = body.errors.some(
+    console.log("ORDERS RESPONSE:", JSON.stringify(data, null, 2));
+
+    if (data.errors?.length) {
+      const isScope = data.errors.some(
         (e) =>
           e.message?.toLowerCase().includes("access denied") ||
           e.message?.toLowerCase().includes("read_orders"),
       );
-      if (isScope) {
-        console.error(`[Dashboard] Scope insuffisant — read_orders manquant`);
-        return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: true };
-      }
+      if (isScope) return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: true };
       return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
     }
 
-    const orders = body.data?.orders;
-    if (!orders) {
-      console.warn(`[Dashboard] Réponse inattendue:`, JSON.stringify(body.data));
-      return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
-    }
+    const orders = data.data?.orders;
+    if (!orders) return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
 
     let totalRevenue = 0;
     let totalShipping = 0;
@@ -96,11 +85,12 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       orderCount++;
     }
 
-    console.log(`[Dashboard] shop=${shop} — ${orderCount} commandes | CA=${totalRevenue.toFixed(2)} € | panier moyen=${orderCount > 0 ? (totalRevenue / orderCount).toFixed(2) : 0} €`);
+    console.log("ORDERS COUNT:", orderCount);
+    console.log("TOTAL CA:", totalRevenue);
 
     return { totalRevenue, totalShipping, orderCount, scopeError: false };
   } catch (err) {
-    console.error(`[Dashboard] Exception fetchShopifyOrders:`, err);
+    console.error("ORDERS ERROR:", err);
     return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
   }
 }
