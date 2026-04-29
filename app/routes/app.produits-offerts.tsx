@@ -11,6 +11,9 @@ export const PRODUIT_LABELS: Record<string, string> = {
   "3_pots":      "3 Pots",
   kit_decouverte:"Kit Découverte (1 pot + fouet)",
   kit_ultime:    "Kit Ultime (1 pot + fouet + bol)",
+  fouet:         "Fouet seul",
+  bol:           "Bol seul",
+  cuillere:      "Cuillère seule",
 };
 
 export const UNIT_COSTS: Record<string, number> = {
@@ -19,6 +22,9 @@ export const UNIT_COSTS: Record<string, number> = {
   "3_pots":      3 * 3.77055,
   kit_decouverte:3.77055 + 4.1806,
   kit_ultime:    3.77055 + 4.1806 + 4.1806,
+  fouet:         4.1806,
+  bol:           4.1806,
+  cuillere:      2.40,
 };
 
 export const POTS_COUNT: Record<string, number> = {
@@ -27,6 +33,9 @@ export const POTS_COUNT: Record<string, number> = {
   "3_pots":      3,
   kit_decouverte:1,
   kit_ultime:    1,
+  fouet:         0,
+  bol:           0,
+  cuillere:      0,
 };
 
 const CATEGORIE_LABELS: Record<string, string> = {
