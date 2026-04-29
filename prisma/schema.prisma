@@ -1,0 +1,127 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model UgcCreator {
+  id           String   @id @default(cuid())
+  creatorName  String
+  instagram    String
+  country      String
+  productType  String
+  status       String
+  videoLink    String?
+  shippingCost Float
+  sentAt       DateTime
+  createdAt    DateTime @default(now())
+}
+
+model Creator {
+  id             String   @id @default(cuid())
+  nom            String
+  instagram      String
+  tiktok         String
+  contact        String?
+  type           String?
+  plateforme     String?
+  pays           String
+  produit        String
+  statut         String   @default("envoyé")
+  fraisPort      Float
+  lienVideo      String?
+  trackingNumber  String?
+  codePromo       String?
+  dateLivraison   String?
+  coutProduit     Float?
+  coutTotalCollab Float?
+  createdAt       DateTime @default(now())
+}
+
+model Achat {
+  id             String   @id @default(cuid())
+  dateCommande   String
+  numeroCommande String
+  fournisseur    String
+  produit        String
+  format         String
+  quantite       Int
+  prixUnitaireHT Float
+  fraisLivraison Float    @default(0)
+  fraisDouane    Float    @default(0)
+  autresFrais    Float    @default(0)
+  coutTotalHT    Float
+  tva            Float    @default(0)
+  coutTotalTTC   Float
+  dateReception  String?
+  statut         String
+  createdAt      DateTime @default(now())
+}
+
+model Vente {
+  id                   String   @id @default(cuid())
+  dateVente            String
+  numeroCommande       String   @unique
+  canalVente           String
+  pays                 String
+  produitVendu         String
+  format               String
+  quantite             Int
+  prixVente            Float
+  remise               Float    @default(0)
+  prixNet              Float
+  tva                  Float    @default(0)
+  prixEncaisse         Float
+  fraisLivraisonClient Float    @default(0)
+  coutLivraisonReel    Float    @default(0)
+  coutProduit          Float
+  coutPub              Float    @default(0)
+  margeBrute           Float
+  margeNette           Float
+  statut               String
+  createdAt            DateTime @default(now())
+}
+
+model Depense {
+  id            String   @id @default(cuid())
+  date          String
+  categorie     String
+  description   String
+  fournisseur   String
+  montantHT     Float
+  tva           Float    @default(0)
+  montantTTC    Float
+  moyenPaiement String
+  moisComptable String
+  notes         String?
+  createdAt     DateTime @default(now())
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
