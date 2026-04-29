@@ -178,6 +178,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const margeBrute = ca - totalAchats - totalFraisLivraison;
   const margeNette = ca - totalDepense;
 
+  console.log("FINAL COSTS:", totalDepense.toFixed(2), "NET:", margeNette.toFixed(2));
+
   return {
     ca,
     nbCommandes,
