@@ -135,6 +135,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const margeBrute = ca - totalAchats - totalFraisLivraison;
   const margeNette = ca - totalDepense;
 
+  console.log("RETURN DATA:", { totalRevenue: ca, orderCount: nbCommandes });
+
   return {
     ca,
     nbCommandes,
@@ -462,6 +464,7 @@ function CountCard({ label, value, icon }: CountCardProps) {
 
 export default function Dashboard() {
   const d = useLoaderData<typeof loader>();
+  console.log("FRONTEND DATA:", d);
 
   const g3: React.CSSProperties = {
     display: "grid",
@@ -491,6 +494,8 @@ export default function Dashboard() {
       }}
     >
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
+
+        <pre style={{ fontSize: 11, background: "#1e1e1e", color: "#d4d4d4", padding: 12, borderRadius: 8, marginBottom: 20, overflow: "auto" }}>{JSON.stringify(d, null, 2)}</pre>
 
         {d.scopeError && (
           <div
