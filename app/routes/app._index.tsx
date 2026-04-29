@@ -22,15 +22,14 @@ type AdminClient = {
 };
 
 const ORDERS_QUERY = `
-  query GetOrders($cursor: String) {
-    orders(first: 250, after: $cursor, sortKey: CREATED_AT) {
+  query GetOrders {
+    orders(first: 50, sortKey: CREATED_AT, reverse: true) {
       edges {
         node {
           currentTotalPriceSet      { shopMoney { amount } }
           currentTotalShippingPriceSet { shopMoney { amount } }
         }
       }
-      pageInfo { hasNextPage endCursor }
     }
   }
 `;
@@ -42,70 +41,76 @@ interface ShopifyStats {
   scopeError: boolean;
 }
 
-async function fetchShopifyOrders(admin: AdminClient): Promise<ShopifyStats> {
-  let totalRevenue = 0;
-  let totalShipping = 0;
-  let orderCount = 0;
-  let cursor: string | null = null;
-  let hasNextPage = true;
-  let pages = 0;
+async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyStats> {
+  console.log(`[Dashboard] shop=${shop} — récupération des 50 dernières commandes`);
 
   try {
-    while (hasNextPage && pages < 10) {
-      pages++;
-      const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor } });
-      const body = (await res.json()) as {
-        data?: {
-          orders?: {
-            edges: {
-              node: {
-                currentTotalPriceSet?: { shopMoney?: { amount?: string } };
-                currentTotalShippingPriceSet?: { shopMoney?: { amount?: string } };
-              };
-            }[];
-            pageInfo: { hasNextPage: boolean; endCursor?: string };
-          };
-        };
-        errors?: { message?: string }[];
-      };
+    const res = await admin.graphql(ORDERS_QUERY);
 
-      if (body.errors?.length) {
-        const isScope = body.errors.some(
-          (e) =>
-            e.message?.toLowerCase().includes("access denied") ||
-            e.message?.toLowerCase().includes("read_orders"),
-        );
-        if (isScope)
-          return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: true };
-        break;
-      }
-
-      const orders = body.data?.orders;
-      if (!orders) break;
-
-      for (const { node } of orders.edges) {
-        totalRevenue += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
-        totalShipping += parseFloat(
-          node.currentTotalShippingPriceSet?.shopMoney?.amount ?? "0",
-        );
-        orderCount++;
-      }
-
-      hasNextPage = orders.pageInfo.hasNextPage;
-      cursor = orders.pageInfo.endCursor ?? null;
+    if (!res.ok) {
+      console.error(`[Dashboard] HTTP ${res.status} ${res.statusText}`);
+      return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
     }
 
+    const body = (await res.json()) as {
+      data?: {
+        orders?: {
+          edges: {
+            node: {
+              currentTotalPriceSet?: { shopMoney?: { amount?: string } };
+              currentTotalShippingPriceSet?: { shopMoney?: { amount?: string } };
+            };
+          }[];
+        };
+      };
+      errors?: { message?: string }[];
+    };
+
+    if (body.errors?.length) {
+      console.error(`[Dashboard] GraphQL errors:`, JSON.stringify(body.errors));
+      const isScope = body.errors.some(
+        (e) =>
+          e.message?.toLowerCase().includes("access denied") ||
+          e.message?.toLowerCase().includes("read_orders"),
+      );
+      if (isScope) {
+        console.error(`[Dashboard] Scope insuffisant — read_orders manquant`);
+        return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: true };
+      }
+      return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
+    }
+
+    const orders = body.data?.orders;
+    if (!orders) {
+      console.warn(`[Dashboard] Réponse inattendue:`, JSON.stringify(body.data));
+      return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
+    }
+
+    let totalRevenue = 0;
+    let totalShipping = 0;
+    let orderCount = 0;
+
+    for (const { node } of orders.edges) {
+      totalRevenue += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      totalShipping += parseFloat(node.currentTotalShippingPriceSet?.shopMoney?.amount ?? "0");
+      orderCount++;
+    }
+
+    console.log(`[Dashboard] shop=${shop} — ${orderCount} commandes | CA=${totalRevenue.toFixed(2)} € | panier moyen=${orderCount > 0 ? (totalRevenue / orderCount).toFixed(2) : 0} €`);
+
     return { totalRevenue, totalShipping, orderCount, scopeError: false };
-  } catch {
+  } catch (err) {
+    console.error(`[Dashboard] Exception fetchShopifyOrders:`, err);
     return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
   }
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  console.log(`[Dashboard] loader — shop=${session.shop}`);
 
   const [shopify, achatAgg, depenseAgg, creatorAgg, nbContents] = await Promise.all([
-    fetchShopifyOrders(admin as AdminClient),
+    fetchShopifyOrders(admin as AdminClient, session.shop),
     safeAggregate(
       () => prisma.achat.aggregate({ _sum: { coutTotalTTC: true } }),
       { _sum: { coutTotalTTC: null } },
