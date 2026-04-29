@@ -13,61 +13,130 @@ async function safeAggregate<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   }
 }
 
+// Minimal type for admin.graphql — avoids importing internal Shopify types
+type AdminClient = {
+  graphql: (
+    query: string,
+    opts?: { variables?: Record<string, unknown> },
+  ) => Promise<Response>;
+};
+
+const ORDERS_QUERY = `
+  query GetOrders($cursor: String) {
+    orders(first: 250, after: $cursor, sortKey: CREATED_AT) {
+      edges {
+        node {
+          currentTotalPriceSet      { shopMoney { amount } }
+          currentTotalShippingPriceSet { shopMoney { amount } }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+interface ShopifyStats {
+  totalRevenue: number;
+  totalShipping: number;
+  orderCount: number;
+  scopeError: boolean;
+}
+
+async function fetchShopifyOrders(admin: AdminClient): Promise<ShopifyStats> {
+  let totalRevenue = 0;
+  let totalShipping = 0;
+  let orderCount = 0;
+  let cursor: string | null = null;
+  let hasNextPage = true;
+  let pages = 0;
+
+  try {
+    while (hasNextPage && pages < 10) {
+      pages++;
+      const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor } });
+      const body = (await res.json()) as {
+        data?: {
+          orders?: {
+            edges: {
+              node: {
+                currentTotalPriceSet?: { shopMoney?: { amount?: string } };
+                currentTotalShippingPriceSet?: { shopMoney?: { amount?: string } };
+              };
+            }[];
+            pageInfo: { hasNextPage: boolean; endCursor?: string };
+          };
+        };
+        errors?: { message?: string }[];
+      };
+
+      if (body.errors?.length) {
+        const isScope = body.errors.some(
+          (e) =>
+            e.message?.toLowerCase().includes("access denied") ||
+            e.message?.toLowerCase().includes("read_orders"),
+        );
+        if (isScope)
+          return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: true };
+        break;
+      }
+
+      const orders = body.data?.orders;
+      if (!orders) break;
+
+      for (const { node } of orders.edges) {
+        totalRevenue += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+        totalShipping += parseFloat(
+          node.currentTotalShippingPriceSet?.shopMoney?.amount ?? "0",
+        );
+        orderCount++;
+      }
+
+      hasNextPage = orders.pageInfo.hasNextPage;
+      cursor = orders.pageInfo.endCursor ?? null;
+    }
+
+    return { totalRevenue, totalShipping, orderCount, scopeError: false };
+  } catch {
+    return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
+  }
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
 
-  const [venteAgg, achatAgg, depenseAgg, creatorAgg, nbContents] =
-    await Promise.all([
-      safeAggregate(
-        () =>
-          prisma.vente.aggregate({
-            _sum: {
-              prixEncaisse: true,
-              coutLivraisonReel: true,
-              margeBrute: true,
-              margeNette: true,
-            },
-            _count: { _all: true },
-          }),
-        {
-          _sum: {
-            prixEncaisse: null,
-            coutLivraisonReel: null,
-            margeBrute: null,
-            margeNette: null,
-          },
-          _count: { _all: 0 },
-        },
-      ),
-      safeAggregate(
-        () => prisma.achat.aggregate({ _sum: { coutTotalTTC: true } }),
-        { _sum: { coutTotalTTC: null } },
-      ),
-      safeAggregate(
-        () => prisma.depense.aggregate({ _sum: { montantTTC: true } }),
-        { _sum: { montantTTC: null } },
-      ),
-      safeAggregate(
-        () =>
-          prisma.creator.aggregate({
-            _sum: { coutTotalCollab: true },
-            _count: { _all: true },
-          }),
-        { _sum: { coutTotalCollab: null }, _count: { _all: 0 } },
-      ),
-      safeAggregate(
-        () => prisma.creator.count({ where: { lienVideo: { not: null } } }),
-        0,
-      ),
-    ]);
+  const [shopify, achatAgg, depenseAgg, creatorAgg, nbContents] = await Promise.all([
+    fetchShopifyOrders(admin as AdminClient),
+    safeAggregate(
+      () => prisma.achat.aggregate({ _sum: { coutTotalTTC: true } }),
+      { _sum: { coutTotalTTC: null } },
+    ),
+    safeAggregate(
+      () => prisma.depense.aggregate({ _sum: { montantTTC: true } }),
+      { _sum: { montantTTC: null } },
+    ),
+    safeAggregate(
+      () =>
+        prisma.creator.aggregate({
+          _sum: { coutTotalCollab: true },
+          _count: { _all: true },
+        }),
+      { _sum: { coutTotalCollab: null }, _count: { _all: 0 } },
+    ),
+    safeAggregate(
+      () => prisma.creator.count({ where: { lienVideo: { not: null } } }),
+      0,
+    ),
+  ]);
 
-  const ca = venteAgg._sum.prixEncaisse ?? 0;
-  const nbCommandes = venteAgg._count._all ?? 0;
+  const ca = shopify.totalRevenue;
+  const nbCommandes = shopify.orderCount;
+  const totalFraisLivraison = shopify.totalShipping;
   const totalAchats = achatAgg._sum.coutTotalTTC ?? 0;
   const totalDepenses = depenseAgg._sum.montantTTC ?? 0;
   const totalFraisUgc = creatorAgg._sum.coutTotalCollab ?? 0;
-  const totalFraisLivraison = venteAgg._sum.coutLivraisonReel ?? 0;
   const totalDepense = totalAchats + totalDepenses + totalFraisLivraison + totalFraisUgc;
+  const margeBrute = ca - totalAchats - totalFraisLivraison;
+  const margeNette = ca - totalDepense;
 
   return {
     ca,
@@ -78,11 +147,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     totalFraisUgc,
     totalFraisLivraison,
     totalDepense,
-    resultatNet: ca - totalDepense,
-    margeBrute: venteAgg._sum.margeBrute ?? 0,
-    margeNette: venteAgg._sum.margeNette ?? 0,
+    resultatNet: margeNette,
+    margeBrute,
+    margeNette,
     nbCreateurs: creatorAgg._count._all ?? 0,
     nbContents: nbContents ?? 0,
+    scopeError: shopify.scopeError,
   };
 };
 
@@ -424,6 +494,22 @@ export default function Dashboard() {
       }}
     >
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
+
+        {d.scopeError && (
+          <div
+            style={{
+              background: "#fffbeb",
+              border: "1px solid #f59e0b",
+              borderRadius: 10,
+              padding: "12px 16px",
+              marginBottom: 24,
+              fontSize: 13,
+              color: "#92400e",
+            }}
+          >
+            Scope insuffisant — ajoutez <strong>read_orders</strong> dans les scopes de l'app et réinstallez-la. Les données CA affichées sont à 0.
+          </div>
+        )}
 
         {/* Header */}
         <div
