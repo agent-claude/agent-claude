@@ -27,14 +27,71 @@ const ORDERS_QUERY = `
       edges {
         node {
           id
-          name
-          createdAt
           currentTotalPriceSet { shopMoney { amount } }
+          shippingAddress { countryCode }
+          lineItems(first: 10) {
+            edges {
+              node {
+                title
+                quantity
+              }
+            }
+          }
         }
       }
     }
   }
 `;
+
+interface OrderNode {
+  id?: string;
+  currentTotalPriceSet?: { shopMoney?: { amount?: string } };
+  shippingAddress?: { countryCode?: string };
+  lineItems?: {
+    edges: { node: { title?: string; quantity?: number } }[];
+  };
+}
+
+// Tarifs livraison par pays et type de commande
+function getShippingCost(order: OrderNode): number {
+  const country = (order.shippingAddress?.countryCode ?? "").toUpperCase();
+  const items = order.lineItems?.edges ?? [];
+
+  const isKitUltime = items.some(({ node }) =>
+    node.title?.toLowerCase().includes("kit ultime"),
+  );
+  const isKitDecouverte = items.some(({ node }) =>
+    node.title?.toLowerCase().includes("kit découverte") ||
+    node.title?.toLowerCase().includes("kit decouverte"),
+  );
+  const totalPots = items.reduce((sum, { node }) => {
+    const title = node.title?.toLowerCase() ?? "";
+    if (!title.includes("kit")) return sum + (node.quantity ?? 0);
+    return sum;
+  }, 0);
+
+  switch (country) {
+    case "FR":
+      if (isKitUltime) return 9.29;
+      if (isKitDecouverte) return 5.49;
+      return totalPots >= 3 ? 7.59 : 5.49;
+
+    case "BE":
+      return isKitUltime ? 6.60 : 4.60;
+
+    case "IT":
+      return isKitUltime ? 9.50 : 6.60;
+
+    case "DE":
+      return isKitUltime ? 13.80 : 12.50;
+
+    case "CH":
+      return isKitUltime ? 19.39 : 14.99;
+
+    default:
+      return 0;
+  }
+}
 
 interface ShopifyStats {
   totalRevenue: number;
@@ -47,18 +104,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
   try {
     const res = await admin.graphql(ORDERS_QUERY);
     const data = (await res.json()) as {
-      data?: {
-        orders?: {
-          edges: {
-            node: {
-              id?: string;
-              name?: string;
-              createdAt?: string;
-              currentTotalPriceSet?: { shopMoney?: { amount?: string } };
-            };
-          }[];
-        };
-      };
+      data?: { orders?: { edges: { node: OrderNode }[] } };
       errors?: { message?: string }[];
     };
 
@@ -77,16 +123,18 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
     if (!orders) return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
 
     let totalRevenue = 0;
+    let totalShipping = 0;
     let orderCount = 0;
 
     for (const { node } of orders.edges) {
       totalRevenue += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      totalShipping += getShippingCost(node);
       orderCount++;
     }
 
-    console.log(`[Dashboard] ${shop} — ${orderCount} commandes, CA ${totalRevenue.toFixed(2)} €`);
+    console.log(`[Dashboard] ${shop} — ${orderCount} commandes, CA ${totalRevenue.toFixed(2)} €, livraison ${totalShipping.toFixed(2)} €`);
 
-    return { totalRevenue, totalShipping: 0, orderCount, scopeError: false };
+    return { totalRevenue, totalShipping, orderCount, scopeError: false };
   } catch (err) {
     console.error(`[Dashboard] fetchShopifyOrders error (${shop}):`, err);
     return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
