@@ -26,8 +26,10 @@ const ORDERS_QUERY = `
     orders(first: 50, sortKey: CREATED_AT, reverse: true) {
       edges {
         node {
-          currentTotalPriceSet      { shopMoney { amount } }
-          currentTotalShippingPriceSet { shopMoney { amount } }
+          id
+          name
+          createdAt
+          currentTotalPriceSet { shopMoney { amount } }
         }
       }
     }
@@ -51,8 +53,10 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
         orders?: {
           edges: {
             node: {
+              id?: string;
+              name?: string;
+              createdAt?: string;
               currentTotalPriceSet?: { shopMoney?: { amount?: string } };
-              currentTotalShippingPriceSet?: { shopMoney?: { amount?: string } };
             };
           }[];
         };
@@ -76,19 +80,17 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
     if (!orders) return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
 
     let totalRevenue = 0;
-    let totalShipping = 0;
     let orderCount = 0;
 
     for (const { node } of orders.edges) {
       totalRevenue += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
-      totalShipping += parseFloat(node.currentTotalShippingPriceSet?.shopMoney?.amount ?? "0");
       orderCount++;
     }
 
     console.log("ORDERS COUNT:", orderCount);
     console.log("TOTAL CA:", totalRevenue);
 
-    return { totalRevenue, totalShipping, orderCount, scopeError: false };
+    return { totalRevenue, totalShipping: 0, orderCount, scopeError: false };
   } catch (err) {
     console.error("ORDERS ERROR:", err);
     return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
