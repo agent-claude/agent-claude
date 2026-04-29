@@ -185,12 +185,16 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
-  const [shopify, depenseAgg, creatorAgg, nbContents] = await Promise.all([
+  const [shopify, depenseAgg, creatorAgg, nbContents, offertsAgg] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
     safeAggregate(() => prisma.depense.aggregate({ _sum: { montantTTC: true } }), { _sum: { montantTTC: null } }),
     safeAggregate(() => prisma.creator.aggregate({ _sum: { coutTotalCollab: true }, _count: { _all: true } }),
       { _sum: { coutTotalCollab: null }, _count: { _all: 0 } }),
     safeAggregate(() => prisma.creator.count({ where: { lienVideo: { not: null } } }), 0),
+    safeAggregate(
+      () => prisma.produitOffert.aggregate({ _sum: { coutTotal: true, potsEquivalent: true } }),
+      { _sum: { coutTotal: null, potsEquivalent: null } },
+    ),
   ]);
 
   // ── Constantes ───────────────────────────────────────────────────────────────
@@ -201,13 +205,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const totalDepenses       = depenseAgg._sum.montantTTC ?? 0;
   const totalFraisUgc       = creatorAgg._sum.coutTotalCollab ?? 0;
 
+  // ── Produits offerts ─────────────────────────────────────────────────────────
+  const coutProduitsOfferts = offertsAgg._sum.coutTotal      ?? 0;
+  const potsOfferts         = offertsAgg._sum.potsEquivalent ?? 0;
+
   // ── Bloc 1 : Résultat business (hors ads) ────────────────────────────────────
   const ca                  = shopify.totalRevenue;
   const nbCommandes         = shopify.orderCount;
   const panierMoyen         = nbCommandes > 0 ? ca / nbCommandes : 0;
   const totalCOGS           = shopify.totalProductCost;
   const totalFraisLivraison = shopify.totalShipping;
-  const coutsDirects        = totalCOGS + totalFraisLivraison;
+  const coutsDirects        = totalCOGS + totalFraisLivraison + coutProduitsOfferts;
   const resultatBusiness    = ca - coutsDirects;
   const margeBusinessPct    = ca > 0 ? (resultatBusiness / ca) * 100 : 0;
   const profitParCommande   = nbCommandes > 0 ? resultatBusiness / nbCommandes : 0;
@@ -222,21 +230,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // ── Bloc 3 : Résultat global ──────────────────────────────────────────────────
   const autresCharges       = totalDepenses + totalFraisUgc;
-  const totalChargesGlobal  = coutsDirects + marketingCosts + autresCharges;
+  const totalChargesGlobal  = coutsDirects + marketingCosts + autresCharges; // coutsDirects inclut déjà produitsOfferts
   const resultatGlobal      = ca - totalChargesGlobal;
   const margeGlobalePct     = ca > 0 ? (resultatGlobal / ca) * 100 : 0;
   const coutParCommande     = nbCommandes > 0 ? totalChargesGlobal / nbCommandes : 0;
 
   // ── Stock ─────────────────────────────────────────────────────────────────────
   const potsVendus          = shopify.totalPotsVendus;
-  const potsRestants        = Math.max(0, stockInitialPots - potsVendus);
-  const stockConsomme       = totalCOGS;
+  const potsConsommes       = potsVendus + potsOfferts;
+  const potsRestants        = Math.max(0, stockInitialPots - potsConsommes);
+  const stockConsomme       = totalCOGS + coutProduitsOfferts;
   const stockRestantValeur  = Math.max(0, stockTotalCost - stockConsomme);
-  const stockPctEcoule      = stockInitialPots > 0 ? (potsVendus / stockInitialPots) * 100 : 0;
+  const stockPctEcoule      = stockInitialPots > 0 ? (potsConsommes / stockInitialPots) * 100 : 0;
 
   return {
     // Commun
     ca, nbCommandes, panierMoyen, totalCOGS, totalFraisLivraison,
+    coutProduitsOfferts, potsOfferts,
     // Bloc 1
     coutsDirects, resultatBusiness, margeBusinessPct, profitParCommande,
     // Bloc 2
@@ -246,7 +256,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     totalChargesGlobal, resultatGlobal, margeGlobalePct, coutParCommande,
     // Stock
     stockTotalCost, stockInitialPots, stockConsomme, stockRestantValeur,
-    potsVendus, potsRestants, stockPctEcoule,
+    potsVendus, potsConsommes, potsRestants, stockPctEcoule,
     // Autres
     nbCreateurs: creatorAgg._count._all ?? 0,
     nbContents:  nbContents ?? 0,
@@ -434,15 +444,28 @@ export default function Dashboard() {
                 sub={`Marge brute : ${d.margeBusinessPct.toFixed(1)} %`} />
             </div>
 
-            <div className="dash-grid-3">
+            <div className="dash-grid-4">
               <MetricCard label="COGS (coût produits)" value={eur(d.totalCOGS)}
                 sub={pctStr(d.totalCOGS, d.ca) + " du CA"} valueColor={T.red} />
               <MetricCard label="Frais livraison" value={eur(d.totalFraisLivraison)}
                 sub={pctStr(d.totalFraisLivraison, d.ca) + " du CA"} valueColor={T.red} />
+              <MetricCard
+                label="Produits offerts"
+                value={eur(d.coutProduitsOfferts)}
+                sub={d.potsOfferts > 0 ? `${d.potsOfferts} pots — UGC, cafés, collabs` : "Aucun enregistré"}
+                valueColor={d.coutProduitsOfferts > 0 ? T.red : T.muted}
+              />
               <MetricCard label="Profit / commande" value={eur(d.profitParCommande)}
                 sub="résultat business ÷ commandes"
                 valueColor={d.profitParCommande < 0 ? T.red : T.green} />
             </div>
+
+            {d.coutProduitsOfferts === 0 && (
+              <div style={{ marginTop: 10, fontSize: 12, color: T.muted, background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 10, padding: "10px 14px" }}>
+                Aucun produit offert enregistré.{" "}
+                <a href="/app/produits-offerts" style={{ color: T.accent, fontWeight: 600 }}>Gérer les produits offerts →</a>
+              </div>
+            )}
           </section>
 
           <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
@@ -495,31 +518,41 @@ export default function Dashboard() {
             <div className="dash-grid-4">
               <MetricCard label="COGS" value={eur(d.totalCOGS)}
                 sub={pctStr(d.totalCOGS, d.ca) + " du CA"} valueColor={T.red} />
+              <MetricCard label="Produits offerts" value={eur(d.coutProduitsOfferts)}
+                sub={`${d.potsOfferts} pots offerts`} valueColor={T.red} />
               <MetricCard label="Livraison" value={eur(d.totalFraisLivraison)}
                 sub={pctStr(d.totalFraisLivraison, d.ca) + " du CA"} valueColor={T.red} />
               <MetricCard label="Ads Meta" value={eur(d.marketingCosts)}
                 sub={pctStr(d.marketingCosts, d.ca) + " du CA"} valueColor={T.red} accentTop />
-              <MetricCard label="Autres charges" value={eur(d.autresCharges)}
-                sub={`Annexes ${eur(d.totalDepenses)} + UGC ${eur(d.totalFraisUgc)}`} valueColor={T.red} />
+            </div>
+            <div className="dash-grid-2" style={{ marginTop: 10 }}>
+              <MetricCard label="Dépenses annexes" value={eur(d.totalDepenses)}
+                sub={pctStr(d.totalDepenses, d.ca) + " du CA"} valueColor={T.red} />
+              <MetricCard label="Frais UGC (port + collab)" value={eur(d.totalFraisUgc)}
+                sub={pctStr(d.totalFraisUgc, d.ca) + " du CA"} valueColor={T.red} />
             </div>
           </section>
 
           <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
 
-          {/* ══ BLOC B — STOCK / INVESTISSEMENT ═════════════════════════════ */}
+          {/* ══ STOCK ════════════════════════════════════════════════════════ */}
           <section style={{ marginBottom: 48 }}>
-            <SectionLabel>Stock / Investissement (info — non déduit du résultat)</SectionLabel>
-            <div className="dash-grid-4">
-              <MetricCard label="Stock total acheté" value={eur(d.stockTotalCost)}
-                sub={`${d.stockInitialPots} pots initiaux`} />
-              <MetricCard label="Stock consommé" value={eur(d.stockConsomme)}
-                sub={`${d.potsVendus} pots vendus`} valueColor={T.orange} />
-              <MetricCard label="Stock restant estimé" value={eur(d.stockRestantValeur)}
-                sub={`${d.potsRestants} pots restants`} valueColor={T.green} />
-              <MetricCard label="Stock écoulé" value={d.stockPctEcoule.toFixed(1) + " %"}
-                sub={`${d.potsVendus} / ${d.stockInitialPots} pots`}
-                valueColor={d.stockPctEcoule > 80 ? T.red : d.stockPctEcoule > 50 ? T.orange : T.green} />
+            <SectionLabel>Stock (info — non déduit du résultat business)</SectionLabel>
+            <div className="dash-grid-4" style={{ marginBottom: 10 }}>
+              <MetricCard label="Stock initial" value={eur(d.stockTotalCost)}
+                sub={`${d.stockInitialPots} pots achetés`} />
+              <MetricCard label="Vendus (Shopify)" value={eur(d.totalCOGS)}
+                sub={`${d.potsVendus} pots`} valueColor={T.red} />
+              <MetricCard label="Offerts (UGC / cafés)" value={eur(d.coutProduitsOfferts)}
+                sub={d.potsOfferts > 0 ? `${d.potsOfferts} pots` : "0 pot enregistré"}
+                valueColor={d.potsOfferts > 0 ? T.orange : T.muted} />
+              <MetricCard label="Stock restant réel" value={eur(d.stockRestantValeur)}
+                sub={`${d.potsRestants} pots (${d.potsConsommes} consommés / ${d.stockInitialPots})`}
+                valueColor={T.green} />
             </div>
+            <MetricCard label="Stock écoulé" value={d.stockPctEcoule.toFixed(1) + " %"}
+              sub={`${d.potsVendus} vendus + ${d.potsOfferts} offerts = ${d.potsConsommes} / ${d.stockInitialPots} pots`}
+              valueColor={d.stockPctEcoule > 80 ? T.red : d.stockPctEcoule > 50 ? T.orange : T.green} />
           </section>
 
           <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />

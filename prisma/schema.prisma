@@ -106,6 +106,20 @@ model Depense {
   createdAt     DateTime @default(now())
 }
 
+model ProduitOffert {
+  id             String   @id @default(cuid())
+  date           String
+  categorie      String   // ugc | cafe | collaboration | autre
+  beneficiaire   String?
+  produit        String   // pot | 2_pots | 3_pots | kit_decouverte | kit_ultime
+  quantite       Int
+  coutUnitaire   Float
+  coutTotal      Float
+  potsEquivalent Int
+  notes          String?
+  createdAt      DateTime @default(now())
+}
+
 model Session {
   id            String    @id
   shop          String
