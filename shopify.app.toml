@@ -2,7 +2,7 @@
 
 client_id = "7210f8100c046d764518213be1437890"
 name = "Agent Claude"
-application_url = "https://example.com"
+application_url = "https://agent-claude.onrender.com"
 embedded = true
 
 [access_scopes]
@@ -45,7 +45,7 @@ api_version = "2026-07"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://agent-claude.onrender.com/auth/callback" ]
 
 [build]
 include_config_on_deploy = true
