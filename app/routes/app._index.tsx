@@ -19,6 +19,7 @@ const ORDERS_QUERY = `
       edges {
         node {
           id
+          name
           currentTotalPriceSet { shopMoney { amount } }
           shippingAddress { countryCode }
           lineItems(first: 10) {
@@ -32,49 +33,87 @@ const ORDERS_QUERY = `
 
 interface OrderNode {
   id?: string;
+  name?: string;
   currentTotalPriceSet?: { shopMoney?: { amount?: string } };
   shippingAddress?: { countryCode?: string };
   lineItems?: { edges: { node: { title?: string; quantity?: number } }[] };
 }
 
 // ── Coûts unitaires réels (facture CMD-001) ───────────────────────────────────
-const POT_COST      = 3.77055;
-const BOL_COST      = 4.1806;
-const FOUET_COST    = 4.1806;
-const CUILLERE_COST = 2.40;
+const POT_COST   = 3.77055;
+const BOL_COST   = 4.1806;
+const FOUET_COST = 4.1806;
 
-function getProductCost(order: OrderNode): number {
-  let cost = 0;
-  for (const { node } of order.lineItems?.edges ?? []) {
-    const title = (node.title ?? "").toLowerCase();
-    const qty   = node.quantity ?? 1;
-    if (title.includes("kit ultime"))
-      cost += qty * (3 * POT_COST + BOL_COST + FOUET_COST + CUILLERE_COST);
-    else if (title.includes("kit découverte") || title.includes("kit decouverte"))
-      cost += qty * (2 * POT_COST + FOUET_COST);
-    else
-      cost += qty * POT_COST;
-  }
-  return cost;
+// ── Composition produits ──────────────────────────────────────────────────────
+type ProductType = "kit_ultime" | "kit_decouverte" | "3_pots" | "2_pots" | "pot" | "inconnu";
+
+interface LineItemBreakdown {
+  title: string;
+  qty: number;
+  type: ProductType;
+  composition: string;
+  unitCost: number;
+  totalCost: number;
 }
 
-function getShippingCost(order: OrderNode): number {
-  const country = (order.shippingAddress?.countryCode ?? "").toUpperCase();
-  const items   = order.lineItems?.edges ?? [];
-  const isKitUltime     = items.some(({ node }) => node.title?.toLowerCase().includes("kit ultime"));
-  const isKitDecouverte = items.some(({ node }) =>
-    node.title?.toLowerCase().includes("kit découverte") ||
-    node.title?.toLowerCase().includes("kit decouverte"));
-  const totalPots = items.reduce((s, { node }) => {
-    const t = node.title?.toLowerCase() ?? "";
-    return t.includes("kit") ? s : s + (node.quantity ?? 0);
-  }, 0);
-  switch (country) {
-    case "FR": return isKitUltime ? 9.29 : isKitDecouverte ? 5.49 : totalPots >= 3 ? 7.59 : 5.49;
-    case "BE": return isKitUltime ? 6.60 : 4.60;
-    case "IT": return isKitUltime ? 9.50 : 6.60;
-    case "DE": return isKitUltime ? 13.80 : 12.50;
-    case "CH": return isKitUltime ? 19.39 : 14.99;
+interface OrderBreakdown {
+  name: string;
+  revenue: number;
+  country: string;
+  items: LineItemBreakdown[];
+  productCost: number;
+  shippingCost: number;
+}
+
+function classifyItem(rawTitle: string, qty: number): LineItemBreakdown {
+  const t = rawTitle.toLowerCase();
+  let type: ProductType, composition: string, unitCost: number;
+
+  if (t.includes("kit ultime")) {
+    type = "kit_ultime"; composition = "1 pot + fouet + bol";
+    unitCost = POT_COST + FOUET_COST + BOL_COST;
+  } else if (t.includes("kit découverte") || t.includes("kit decouverte")) {
+    type = "kit_decouverte"; composition = "1 pot + fouet";
+    unitCost = POT_COST + FOUET_COST;
+  } else if (t.includes("3 pot") || t.includes("3pot") || t.match(/^3\s*x?\s*pot/)) {
+    type = "3_pots"; composition = "3 pots";
+    unitCost = 3 * POT_COST;
+  } else if (t.includes("2 pot") || t.includes("2pot") || t.match(/^2\s*x?\s*pot/)) {
+    type = "2_pots"; composition = "2 pots";
+    unitCost = 2 * POT_COST;
+  } else if (t.includes("pot") || t.includes("matcha")) {
+    type = "pot"; composition = "1 pot";
+    unitCost = POT_COST;
+  } else {
+    type = "inconnu"; composition = "?";
+    unitCost = 0;
+  }
+
+  return { title: rawTitle, qty, type, composition, unitCost, totalCost: qty * unitCost };
+}
+
+function potsInItem(item: LineItemBreakdown): number {
+  switch (item.type) {
+    case "kit_ultime":    return item.qty * 1;
+    case "kit_decouverte":return item.qty * 1;
+    case "3_pots":        return item.qty * 3;
+    case "2_pots":        return item.qty * 2;
+    case "pot":           return item.qty * 1;
+    default:              return 0;
+  }
+}
+
+function getShippingCost(classified: LineItemBreakdown[], country: string): number {
+  const c           = country.toUpperCase();
+  const hasUltime   = classified.some(i => i.type === "kit_ultime");
+  const hasDecouverte = classified.some(i => i.type === "kit_decouverte");
+  const totalPots   = classified.reduce((s, i) => s + potsInItem(i), 0);
+  switch (c) {
+    case "FR": return hasUltime ? 9.29 : hasDecouverte ? 5.49 : totalPots >= 3 ? 7.59 : 5.49;
+    case "BE": return hasUltime ? 6.60 : 4.60;
+    case "IT": return hasUltime ? 9.50 : 6.60;
+    case "DE": return hasUltime ? 13.80 : 12.50;
+    case "CH": return hasUltime ? 19.39 : 14.99;
     default:   return 0;
   }
 }
@@ -85,11 +124,12 @@ interface ShopifyStats {
   totalProductCost: number;
   totalPotsVendus: number;
   orderCount: number;
+  orderBreakdowns: OrderBreakdown[];
   scopeError: boolean;
 }
 
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyStats> {
-  const zero = { totalRevenue: 0, totalShipping: 0, totalProductCost: 0, totalPotsVendus: 0, orderCount: 0 };
+  const zero = { totalRevenue: 0, totalShipping: 0, totalProductCost: 0, totalPotsVendus: 0, orderCount: 0, orderBreakdowns: [] as OrderBreakdown[] };
   try {
     const res  = await admin.graphql(ORDERS_QUERY);
     const data = (await res.json()) as {
@@ -109,20 +149,33 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
     if (!orders) return { ...zero, scopeError: false };
 
     let totalRevenue = 0, totalShipping = 0, totalProductCost = 0, totalPotsVendus = 0, orderCount = 0;
+    const orderBreakdowns: OrderBreakdown[] = [];
 
     for (const { node } of orders.edges) {
-      totalRevenue     += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
-      totalShipping    += getShippingCost(node);
-      totalProductCost += getProductCost(node);
-      for (const { node: item } of node.lineItems?.edges ?? []) {
-        const t = (item.title ?? "").toLowerCase();
-        const q = item.quantity ?? 1;
-        totalPotsVendus += t.includes("kit ultime") ? q * 3 : t.includes("kit découverte") || t.includes("kit decouverte") ? q * 2 : q;
-      }
+      const revenue  = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      const country  = (node.shippingAddress?.countryCode ?? "").toUpperCase();
+      const items    = (node.lineItems?.edges ?? []).map(({ node: li }) =>
+        classifyItem(li.title ?? "", li.quantity ?? 1));
+      const productCost  = items.reduce((s, i) => s + i.totalCost, 0);
+      const shippingCost = getShippingCost(items, country);
+
+      totalRevenue     += revenue;
+      totalShipping    += shippingCost;
+      totalProductCost += productCost;
+      totalPotsVendus  += items.reduce((s, i) => s + potsInItem(i), 0);
       orderCount++;
+
+      orderBreakdowns.push({
+        name: node.name ?? `#${orderCount}`,
+        revenue,
+        country: country || "?",
+        items,
+        productCost,
+        shippingCost,
+      });
     }
 
-    return { totalRevenue, totalShipping, totalProductCost, totalPotsVendus, orderCount, scopeError: false };
+    return { totalRevenue, totalShipping, totalProductCost, totalPotsVendus, orderCount, orderBreakdowns, scopeError: false };
   } catch (err) {
     console.error(`[Dashboard] fetchShopifyOrders error (${shop}):`, err);
     return { ...zero, scopeError: false };
@@ -178,6 +231,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     stockTotalCost, stockInitialPots, stockConsomme, stockRestantValeur, potsVendus, potsRestants, stockPctEcoule,
     nbCreateurs: creatorAgg._count._all ?? 0,
     nbContents:  nbContents ?? 0,
+    orderBreakdowns: shopify.orderBreakdowns,
     scopeError:  shopify.scopeError,
   };
 };
@@ -429,6 +483,65 @@ export default function Dashboard() {
               <MetricCard label="Stock écoulé" value={d.stockPctEcoule.toFixed(1) + " %"}
                 sub={`${d.potsVendus} / ${d.stockInitialPots} pots`}
                 valueColor={d.stockPctEcoule > 80 ? T.red : d.stockPctEcoule > 50 ? T.orange : T.green} />
+            </div>
+          </section>
+
+          <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
+
+          {/* ══ VÉRIFICATION COGS ═══════════════════════════════════════════ */}
+          <section style={{ marginBottom: 48 }}>
+            <SectionLabel>Vérification COGS — détail par commande</SectionLabel>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "inherit" }}>
+                <thead>
+                  <tr style={{ background: "#f1f5f9" }}>
+                    {["Commande", "Pays", "Produit", "Qté", "Composition", "Coût unit.", "Coût total", "Livraison", "CA"].map(h => (
+                      <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.orderBreakdowns.map((order, oi) =>
+                    order.items.map((item, ii) => (
+                      <tr key={`${oi}-${ii}`} style={{ background: ii === 0 && oi % 2 === 0 ? "#fff" : ii === 0 && oi % 2 !== 0 ? "#f8fafc" : "transparent", borderTop: ii === 0 ? `1px solid ${T.border}` : undefined }}>
+                        {ii === 0 && (
+                          <>
+                            <td rowSpan={order.items.length} style={{ padding: "8px 10px", fontWeight: 700, color: T.accent, whiteSpace: "nowrap", verticalAlign: "top" }}>{order.name}</td>
+                            <td rowSpan={order.items.length} style={{ padding: "8px 10px", color: T.muted, verticalAlign: "top" }}>{order.country}</td>
+                          </>
+                        )}
+                        <td style={{ padding: "6px 10px", color: T.text, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</td>
+                        <td style={{ padding: "6px 10px", color: T.muted, textAlign: "center" }}>{item.qty}</td>
+                        <td style={{ padding: "6px 10px" }}>
+                          <span style={{
+                            fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 99,
+                            background: item.type === "inconnu" ? T.redBg : item.type.startsWith("kit") ? "#eef2ff" : "#f0fdf4",
+                            color: item.type === "inconnu" ? T.red : item.type.startsWith("kit") ? T.accent : T.green,
+                          }}>
+                            {item.composition}
+                          </span>
+                        </td>
+                        <td style={{ padding: "6px 10px", color: T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{eur(item.unitCost)}</td>
+                        <td style={{ padding: "6px 10px", fontWeight: 600, color: T.red, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{eur(item.totalCost)}</td>
+                        {ii === 0 && (
+                          <>
+                            <td rowSpan={order.items.length} style={{ padding: "8px 10px", color: T.muted, whiteSpace: "nowrap", verticalAlign: "top", fontVariantNumeric: "tabular-nums" }}>{eur(order.shippingCost)}</td>
+                            <td rowSpan={order.items.length} style={{ padding: "8px 10px", fontWeight: 600, color: T.green, whiteSpace: "nowrap", verticalAlign: "top", fontVariantNumeric: "tabular-nums" }}>{eur(order.revenue)}</td>
+                          </>
+                        )}
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: "#f1f5f9", borderTop: `2px solid ${T.border}` }}>
+                    <td colSpan={6} style={{ padding: "8px 10px", fontWeight: 700, color: T.text }}>Total</td>
+                    <td style={{ padding: "8px 10px", fontWeight: 700, color: T.red, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{eur(d.totalCOGS)}</td>
+                    <td style={{ padding: "8px 10px", fontWeight: 700, color: T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{eur(d.totalFraisLivraison)}</td>
+                    <td style={{ padding: "8px 10px", fontWeight: 700, color: T.green, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{eur(d.ca)}</td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           </section>
 
