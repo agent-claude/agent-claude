@@ -97,7 +97,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  console.log(`[Dashboard] loader — shop=${session.shop}`);
+  console.log("CURRENT SHOP:", session.shop);
 
   const [shopify, achatAgg, depenseAgg, creatorAgg, nbContents] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
