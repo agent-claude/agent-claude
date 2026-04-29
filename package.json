@@ -3,7 +3,6 @@
   "private": true,
   "packageManager": "npm@10",
   "scripts": {
-    "install": "npm install --legacy-peer-deps",
     "build": "react-router build",
     "dev": "shopify app dev",
     "dev:clean": "shopify app dev clean && shopify app dev",
