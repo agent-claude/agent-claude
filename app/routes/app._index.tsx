@@ -93,9 +93,40 @@ function getShippingCost(order: OrderNode): number {
   }
 }
 
+// Coûts unitaires réels (source : facture fournisseur CMD-001)
+const POT_COST      = 3.77055;
+const BOL_COST      = 4.1806;
+const FOUET_COST    = 4.1806;
+const CUILLERE_COST = 2.40;
+
+function getProductCost(order: OrderNode): number {
+  const items = order.lineItems?.edges ?? [];
+  let cost = 0;
+
+  for (const { node } of items) {
+    const title = (node.title ?? "").toLowerCase();
+    const qty   = node.quantity ?? 1;
+
+    if (title.includes("kit ultime")) {
+      // 3 pots + bol + fouet + cuillère
+      cost += qty * (3 * POT_COST + BOL_COST + FOUET_COST + CUILLERE_COST);
+    } else if (title.includes("kit découverte") || title.includes("kit decouverte")) {
+      // 2 pots + fouet
+      cost += qty * (2 * POT_COST + FOUET_COST);
+    } else {
+      // Pot seul (1, 2 ou 3 pots selon quantité)
+      cost += qty * POT_COST;
+    }
+  }
+
+  return cost;
+}
+
 interface ShopifyStats {
   totalRevenue: number;
   totalShipping: number;
+  totalProductCost: number;
+  totalPotsVendus: number;
   orderCount: number;
   scopeError: boolean;
 }
@@ -115,41 +146,48 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
           e.message?.toLowerCase().includes("access denied") ||
           e.message?.toLowerCase().includes("read_orders"),
       );
-      if (isScope) return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: true };
-      return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
+      if (isScope) return { totalRevenue: 0, totalShipping: 0, totalProductCost: 0, totalPotsVendus: 0, orderCount: 0, scopeError: true };
+      return { totalRevenue: 0, totalShipping: 0, totalProductCost: 0, totalPotsVendus: 0, orderCount: 0, scopeError: false };
     }
 
     const orders = data.data?.orders;
-    if (!orders) return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
+    if (!orders) return { totalRevenue: 0, totalShipping: 0, totalProductCost: 0, totalPotsVendus: 0, orderCount: 0, scopeError: false };
 
     let totalRevenue = 0;
     let totalShipping = 0;
+    let totalProductCost = 0;
+    let totalPotsVendus = 0;
     let orderCount = 0;
 
     for (const { node } of orders.edges) {
-      totalRevenue += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
-      totalShipping += getShippingCost(node);
+      totalRevenue     += parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      totalShipping    += getShippingCost(node);
+      totalProductCost += getProductCost(node);
+      // Compter les pots vendus pour le suivi stock
+      for (const { node: item } of node.lineItems?.edges ?? []) {
+        const title = (item.title ?? "").toLowerCase();
+        const qty   = item.quantity ?? 1;
+        if (title.includes("kit ultime"))          totalPotsVendus += qty * 3;
+        else if (title.includes("kit découverte") || title.includes("kit decouverte")) totalPotsVendus += qty * 2;
+        else                                       totalPotsVendus += qty;
+      }
       orderCount++;
     }
 
-    console.log(`[Dashboard] ${shop} — ${orderCount} commandes, CA ${totalRevenue.toFixed(2)} €, livraison ${totalShipping.toFixed(2)} €`);
+    console.log(`[Dashboard] ${shop} — ${orderCount} commandes | CA ${totalRevenue.toFixed(2)} € | COGS ${totalProductCost.toFixed(2)} € | ${totalPotsVendus} pots vendus`);
 
-    return { totalRevenue, totalShipping, orderCount, scopeError: false };
+    return { totalRevenue, totalShipping, totalProductCost, totalPotsVendus, orderCount, scopeError: false };
   } catch (err) {
     console.error(`[Dashboard] fetchShopifyOrders error (${shop}):`, err);
-    return { totalRevenue: 0, totalShipping: 0, orderCount: 0, scopeError: false };
+    return { totalRevenue: 0, totalShipping: 0, totalProductCost: 0, totalPotsVendus: 0, orderCount: 0, scopeError: false };
   }
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
-  const [shopify, achatAgg, depenseAgg, creatorAgg, nbContents] = await Promise.all([
+  const [shopify, depenseAgg, creatorAgg, nbContents] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
-    safeAggregate(
-      () => prisma.achat.aggregate({ _sum: { coutTotalTTC: true } }),
-      { _sum: { coutTotalTTC: null } },
-    ),
     safeAggregate(
       () => prisma.depense.aggregate({ _sum: { montantTTC: true } }),
       { _sum: { montantTTC: null } },
@@ -168,17 +206,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ),
   ]);
 
-  const marketingCosts = 731.59;
+  const marketingCosts     = 731.59;
+  const stockInitialPots   = 200;
+  const stockTotalCost     = 1830.24;
 
-  const ca = shopify.totalRevenue;
-  const nbCommandes = shopify.orderCount;
+  const ca                  = shopify.totalRevenue;
+  const nbCommandes         = shopify.orderCount;
   const totalFraisLivraison = shopify.totalShipping;
-  const totalAchats = achatAgg._sum.coutTotalTTC ?? 0;
-  const totalDepenses = depenseAgg._sum.montantTTC ?? 0;
-  const totalFraisUgc = creatorAgg._sum.coutTotalCollab ?? 0;
-  const totalDepense = totalAchats + totalDepenses + totalFraisLivraison + totalFraisUgc + marketingCosts;
-  const margeBrute = ca - totalAchats - totalFraisLivraison;
-  const margeNette = ca - totalDepense;
+  const totalAchats         = shopify.totalProductCost;
+  const totalDepenses       = depenseAgg._sum.montantTTC ?? 0;
+  const totalFraisUgc       = creatorAgg._sum.coutTotalCollab ?? 0;
+  const totalDepense        = totalAchats + totalDepenses + totalFraisLivraison + totalFraisUgc + marketingCosts;
+  const margeBrute          = ca - totalAchats - totalFraisLivraison;
+  const margeNette          = ca - totalDepense;
+  const potsVendus          = shopify.totalPotsVendus;
+  const potsRestants        = Math.max(0, stockInitialPots - potsVendus);
 
   return {
     ca,
@@ -193,6 +235,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     resultatNet: margeNette,
     margeBrute,
     margeNette,
+    stockTotalCost,
+    stockInitialPots,
+    potsVendus,
+    potsRestants,
     nbCreateurs: creatorAgg._count._all ?? 0,
     nbContents: nbContents ?? 0,
     scopeError: shopify.scopeError,
@@ -594,59 +640,32 @@ export default function Dashboard() {
           </span>
         </div>
 
-        {/* Global */}
+        {/* ── Bloc 1 : RENTABILITÉ ── */}
         <section style={{ marginBottom: 44 }}>
-          <SectionLabel>Global</SectionLabel>
+          <SectionLabel>Rentabilité</SectionLabel>
+
+          {/* Résumé global */}
           <div style={g3}>
+            <GlobalCard label="Chiffre d'affaires" value={d.ca} forceColor="green" />
             <GlobalCard label="Total dépensé" value={d.totalDepense} forceColor="red" />
-            <GlobalCard label="Total gagné (CA)" value={d.ca} forceColor="green" />
             <GlobalCard label="Résultat net" value={d.resultatNet} />
           </div>
-        </section>
 
-        {/* Divider */}
-        <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
-
-        {/* Revenus */}
-        <section style={{ marginBottom: 36 }}>
-          <SectionLabel>Revenus</SectionLabel>
-          <div style={g3}>
-            <MetricCard
-              label="Chiffre d'affaires"
-              value={eur(d.ca)}
-              large
-              accent
-            />
-            <MetricCard
-              label="Commandes"
-              value={String(d.nbCommandes)}
-              sub="total cumulé"
-            />
-            <MetricCard
-              label="Panier moyen"
-              value={eur(d.panierMoyen)}
-              sub="par commande"
+          {/* Détail commandes */}
+          <div style={{ ...g3, marginTop: 14 }}>
+            <MetricCard label="Commandes" value={String(d.nbCommandes)} sub="50 dernières" />
+            <MetricCard label="Panier moyen" value={eur(d.panierMoyen)} sub="par commande" />
+            <MetricCard label="Marge nette" value={eur(d.margeNette)}
+              sub={pct(d.margeNette, d.ca) ? pct(d.margeNette, d.ca) + " du CA" : "—"}
+              valueColor={d.margeNette >= 0 ? T.green : T.red}
             />
           </div>
-        </section>
 
-        {/* Divider */}
-        <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
-
-        {/* Coûts */}
-        <section style={{ marginBottom: 36 }}>
-          <SectionLabel>Coûts</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Détail coûts */}
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={g3}>
               <MetricCard
-                label="Marketing"
-                value={eur(d.marketingCosts)}
-                sub={pct(d.marketingCosts, d.ca) ? pct(d.marketingCosts, d.ca) + " du CA" : undefined}
-                valueColor={T.red}
-                accent
-              />
-              <MetricCard
-                label="Achats marchandise"
+                label="Coût produits vendus"
                 value={eur(d.totalAchats)}
                 sub={pct(d.totalAchats, d.ca) ? pct(d.totalAchats, d.ca) + " du CA" : undefined}
                 valueColor={T.red}
@@ -656,6 +675,13 @@ export default function Dashboard() {
                 value={eur(d.totalFraisLivraison)}
                 sub={pct(d.totalFraisLivraison, d.ca) ? pct(d.totalFraisLivraison, d.ca) + " du CA" : undefined}
                 valueColor={T.red}
+              />
+              <MetricCard
+                label="Marketing"
+                value={eur(d.marketingCosts)}
+                sub={pct(d.marketingCosts, d.ca) ? pct(d.marketingCosts, d.ca) + " du CA" : undefined}
+                valueColor={T.red}
+                accent
               />
             </div>
             <div style={g2}>
@@ -678,19 +704,32 @@ export default function Dashboard() {
         {/* Divider */}
         <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
 
-        {/* Rentabilité */}
+        {/* ── Bloc 2 : STOCK (info uniquement) ── */}
         <section style={{ marginBottom: 36 }}>
-          <SectionLabel>Rentabilité</SectionLabel>
-          <div style={g2}>
-            <MarginCard label="Marge brute" value={d.margeBrute} ca={d.ca} />
-            <MarginCard label="Marge nette" value={d.margeNette} ca={d.ca} />
+          <SectionLabel>Stock (informatif)</SectionLabel>
+          <div style={g3}>
+            <MetricCard
+              label="Stock total acheté"
+              value={eur(d.stockTotalCost)}
+              sub={`${d.stockInitialPots} pots — non déduit du résultat`}
+            />
+            <MetricCard
+              label="Stock utilisé"
+              value={`${d.potsVendus} pots`}
+              sub={eur(d.potsVendus * 3.77055) + " de matière"}
+            />
+            <MetricCard
+              label="Stock restant estimé"
+              value={`${d.potsRestants} pots`}
+              sub={eur(d.potsRestants * 3.77055) + " de valeur"}
+            />
           </div>
         </section>
 
         {/* Divider */}
         <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />
 
-        {/* UGC */}
+        {/* ── UGC ── */}
         <section>
           <SectionLabel>UGC</SectionLabel>
           <div style={g2}>
