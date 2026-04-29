@@ -42,7 +42,7 @@ interface ShopifyStats {
 }
 
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyStats> {
-  console.log("SHOP:", shop);
+  console.log("🔥 FETCH ORDERS FOR SHOP:", shop);
 
   try {
     const res = await admin.graphql(ORDERS_QUERY);
@@ -97,7 +97,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  console.log("CURRENT SHOP:", session.shop);
+  console.log("🔥 SHOP UTILISÉ:", session.shop);
 
   const [shopify, achatAgg, depenseAgg, creatorAgg, nbContents] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
