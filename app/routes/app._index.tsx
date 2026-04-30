@@ -273,6 +273,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
     stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
     nbCreateurs, nbPostes, nbContents, ugcCoutMoyen,
+    ugcComps,
     creators,
     orderBreakdowns: shopify.orderBreakdowns,
     scopeError: shopify.scopeError,
@@ -675,13 +676,30 @@ export default function Dashboard() {
               </a>
             </div>
 
-            <div className="g4" style={{ marginBottom: 16 }}>
+            {/* KPIs */}
+            <div className="g4" style={{ marginBottom: 14 }}>
               <MCard label="Créateurs" value={String(d.nbCreateurs)} sub="UGC + influence + café" />
               <MCard label="Postés" value={String(d.nbPostes)} sub="contenu publié" color={T.green} />
               <MCard label="Coût total UGC" value={eur(d.ugcCogs + d.ugcShipping)}
                 sub={`produits ${eur(d.ugcCogs)} + port ${eur(d.ugcShipping)}`} color={T.red} />
               <MCard label="Coût moyen / créateur" value={eur(d.ugcCoutMoyen)}
                 sub="produit + livraison" color={T.orange} />
+            </div>
+
+            {/* Composants offerts via UGC */}
+            <div style={{ marginBottom: 8, fontSize: 11, fontWeight: 600, color: T.dim, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Stock consommé par UGC
+            </div>
+            <div className="g4" style={{ marginBottom: 16 }}>
+              <MCard label="Pots offerts UGC" value={String(d.ugcComps.pots)}
+                sub={`${eur(d.ugcComps.pots * 3.77055)} COGS`} color={T.red} />
+              <MCard label="Fouets offerts UGC" value={String(d.ugcComps.fouets)}
+                sub={`${eur(d.ugcComps.fouets * 4.1806)} COGS`} color={T.red} />
+              <MCard label="Bols offerts UGC" value={String(d.ugcComps.bols)}
+                sub={`${eur(d.ugcComps.bols * 4.1806)} COGS`} color={T.red} />
+              <MCard label="Cuillères offertes UGC" value={String(d.ugcComps.cuilleres)}
+                sub={d.ugcComps.cuilleres > 0 ? `${eur(d.ugcComps.cuilleres * 2.40)} · stock mort` : "Aucune"}
+                color={d.ugcComps.cuilleres > 0 ? T.red : T.muted} />
             </div>
 
             <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", boxShadow: T.shadow }}>
