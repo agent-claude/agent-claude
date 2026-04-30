@@ -46,6 +46,7 @@ model Creator {
   coutTotalCollab Float?
   notes           String?
   createdAt       DateTime @default(now())
+  todos           Todo[]
 }
 
 model Achat {
@@ -125,6 +126,8 @@ model Todo {
   id        String   @id @default(cuid())
   title     String
   done      Boolean  @default(false)
+  creatorId String?
+  creator   Creator? @relation(fields: [creatorId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

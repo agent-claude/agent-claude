@@ -73,7 +73,10 @@ function normPays(raw: string): string {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
-  const creators = await prisma.creator.findMany({ orderBy: { createdAt: "desc" } });
+  const creators = await prisma.creator.findMany({
+    orderBy: { createdAt: "desc" },
+    include: { todos: { orderBy: { createdAt: "asc" } } },
+  });
   const totaux = creators.reduce(
     (acc, c) => {
       const ns = normStatut(c.statut);
@@ -126,9 +129,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const cp       = coutFromKey(produit, quantite);
     const port     = parseFloat(form.get("fraisPort") as string) || ugcShippingFromKey(pays, produit, quantite);
 
-    await prisma.creator.create({
+    const nom = (form.get("nom") as string).trim();
+    const creator = await prisma.creator.create({
       data: {
-        nom:            (form.get("nom") as string).trim(),
+        nom,
         instagram:      (form.get("instagram") as string).trim(),
         tiktok:         (form.get("tiktok") as string) || "",
         type:           form.get("type") as string,
@@ -145,6 +149,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         coutProduit:    cp,
         coutTotalCollab: cp + port,
       },
+    });
+    // Auto-créer les tâches logistiques liées
+    await prisma.todo.createMany({
+      data: [
+        { title: `Préparer colis — ${nom}`,           creatorId: creator.id },
+        { title: `Envoyer colis — ${nom}`,             creatorId: creator.id },
+        { title: `Ajouter numéro de suivi — ${nom}`,  creatorId: creator.id },
+        { title: `Relancer ${nom} pour le contenu`,   creatorId: creator.id },
+        { title: `Poster le contenu de ${nom}`,       creatorId: creator.id },
+      ],
     });
     return null;
   }
@@ -208,21 +222,64 @@ const lbl: React.CSSProperties  = { display: "flex", flexDirection: "column", ga
 const lbT: React.CSSProperties  = { fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" };
 const cell: React.CSSProperties = { padding: "8px 12px", color: "#0f172a" };
 
+// ─── Mini todo (dans la ligne UGC) ───────────────────────────────────────────
+
+function TodoMini({ todo, creatorNom }: { todo: { id: string; title: string; done: boolean }; creatorNom: string }) {
+  const fetcher = useFetcher();
+  const optimisticDone = fetcher.formData?.get("intent") === "toggle" ? !todo.done : todo.done;
+  // Afficher le titre sans le nom du créateur (déjà visible dans la ligne)
+  const label = todo.title
+    .replace(` — ${creatorNom}`, "")
+    .replace(`${creatorNom} `, "")
+    .replace(` de ${creatorNom}`, "")
+    .trim();
+
+  return (
+    <li style={{ display: "flex", alignItems: "center", gap: 7, padding: "3px 0" }}>
+      <fetcher.Form method="post" action="/app/todo" style={{ display: "contents" }}>
+        <input type="hidden" name="intent" value="toggle" />
+        <input type="hidden" name="id" value={todo.id} />
+        <input type="hidden" name="done" value={String(todo.done)} />
+        <button type="submit" style={{
+          width: 15, height: 15, borderRadius: 4, flexShrink: 0, cursor: "pointer",
+          border: optimisticDone ? "none" : "1.5px solid #cbd5e1",
+          background: optimisticDone ? T.green : "transparent",
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+        }}>
+          {optimisticDone && (
+            <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
+              <path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
+        </button>
+      </fetcher.Form>
+      <span style={{ fontSize: 12, color: optimisticDone ? T.dim : T.muted, textDecoration: optimisticDone ? "line-through" : "none" }}>
+        {label}
+      </span>
+    </li>
+  );
+}
+
 // ─── Composant Row éditable ───────────────────────────────────────────────────
 
 function CreatorRow({ c, i }: {
   c: { id: string; nom: string; instagram: string; type: string | null; pays: string; produit: string;
        statut: string; fraisPort: number; trackingNumber: string | null; coutProduit: number | null;
-       coutTotalCollab: number | null; notes: string | null; };
+       coutTotalCollab: number | null; notes: string | null;
+       todos: { id: string; title: string; done: boolean }[] };
   i: number;
 }) {
+  const [showTodos, setShowTodos] = useState(false);
   const fetcher     = useFetcher();
   const statut      = String(fetcher.formData?.get("statut") ?? c.statut);
   const { color: statutColor, background: statutBg } = statutStyle(statut);
   const typeLabel   = TYPE_LABELS[c.type ?? ""] ?? c.type ?? "—";
   const comps       = keyToComps(c.produit, 1);
+  const doneTodos   = c.todos.filter(t => t.done).length;
+  const totalTodos  = c.todos.length;
 
   return (
+  <>
     <tr style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
       <td style={{ ...cell, fontWeight: 600 }}>
         <div>{c.nom}</div>
@@ -263,8 +320,21 @@ function CreatorRow({ c, i }: {
       <td style={{ ...cell, fontSize: 11, color: c.trackingNumber ? T.text : T.dim, fontVariantNumeric: "tabular-nums" }}>
         {c.trackingNumber ?? "—"}
       </td>
-      <td style={{ ...cell, color: T.muted, fontSize: 11, maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <td style={{ ...cell, color: T.muted, fontSize: 11, maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {c.notes ?? "—"}
+      </td>
+      {/* Tâches */}
+      <td style={cell}>
+        {totalTodos > 0 ? (
+          <button type="button" onClick={() => setShowTodos(v => !v)} style={{
+            background: "none", border: `1px solid ${T.border}`, borderRadius: 8,
+            padding: "3px 9px", fontSize: 11, cursor: "pointer", fontWeight: 600,
+            color: doneTodos === totalTodos ? T.green : T.muted,
+            whiteSpace: "nowrap",
+          }}>
+            {doneTodos}/{totalTodos} {showTodos ? "▲" : "▼"}
+          </button>
+        ) : <span style={{ color: T.dim, fontSize: 11 }}>—</span>}
       </td>
       <td style={cell}>
         <fetcher.Form method="post">
@@ -274,6 +344,17 @@ function CreatorRow({ c, i }: {
         </fetcher.Form>
       </td>
     </tr>
+    {/* Sous-ligne tâches */}
+    {showTodos && totalTodos > 0 && (
+      <tr style={{ background: "#f8fafc" }}>
+        <td colSpan={12} style={{ padding: "8px 16px 12px 24px", borderBottom: `1px solid ${T.border}` }}>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: "2px 24px" }}>
+            {c.todos.map(t => <TodoMini key={t.id} todo={t} creatorNom={c.nom} />)}
+          </ul>
+        </td>
+      </tr>
+    )}
+  </>
   );
 }
 
@@ -523,7 +604,7 @@ export default function UGCPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / N° suivi", "Tracking", "Notes", ""].map(h => (
+                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / N° suivi", "Tracking", "Notes", "Tâches", ""].map(h => (
                       <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                     ))}
                   </tr>

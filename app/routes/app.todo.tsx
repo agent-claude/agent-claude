@@ -8,7 +8,10 @@ import prisma from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
-  const todos = await prisma.todo.findMany({ orderBy: [{ done: "asc" }, { createdAt: "desc" }] });
+  const todos = await prisma.todo.findMany({
+    orderBy: [{ done: "asc" }, { createdAt: "desc" }],
+    include: { creator: { select: { nom: true } } },
+  });
   return { todos };
 };
 
@@ -26,9 +29,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "toggle") {
-    const id   = form.get("id") as string;
-    const done = form.get("done") === "true";
-    await prisma.todo.update({ where: { id }, data: { done: !done } });
+    const id      = form.get("id") as string;
+    const wasDone = form.get("done") === "true";
+    const existing = await prisma.todo.findUnique({ where: { id }, select: { creatorId: true } });
+
+    await prisma.todo.update({ where: { id }, data: { done: !wasDone } });
+
+    // Bonus : si toutes les tâches du créateur sont faites → statut "publie"
+    if (existing?.creatorId && !wasDone) {
+      const remaining = await prisma.todo.count({
+        where: { creatorId: existing.creatorId, done: false },
+      });
+      if (remaining === 0) {
+        await prisma.creator.update({
+          where: { id: existing.creatorId },
+          data:  { statut: "publie" },
+        });
+      }
+    }
     return null;
   }
 
@@ -52,12 +70,12 @@ const T = {
 
 // ─── Composant tâche ─────────────────────────────────────────────────────────
 
-function TodoItem({ todo }: { todo: { id: string; title: string; done: boolean } }) {
+function TodoItem({ todo }: {
+  todo: { id: string; title: string; done: boolean; creator: { nom: string } | null }
+}) {
   const fetcher = useFetcher();
   const optimisticDone = fetcher.formData
-    ? fetcher.formData.get("intent") === "toggle"
-      ? !todo.done
-      : todo.done
+    ? fetcher.formData.get("intent") === "toggle" ? !todo.done : todo.done
     : todo.done;
   const isDeleting = fetcher.formData?.get("intent") === "delete";
 
@@ -91,7 +109,7 @@ function TodoItem({ todo }: { todo: { id: string; title: string; done: boolean }
         </button>
       </fetcher.Form>
 
-      {/* Titre */}
+      {/* Titre + badge créateur */}
       <span style={{
         flex: 1, fontSize: 14, color: optimisticDone ? T.muted : T.text,
         textDecoration: optimisticDone ? "line-through" : "none",
@@ -99,6 +117,14 @@ function TodoItem({ todo }: { todo: { id: string; title: string; done: boolean }
       }}>
         {todo.title}
       </span>
+      {todo.creator && (
+        <span style={{
+          fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 99, flexShrink: 0,
+          background: "#eef2ff", color: T.accent, whiteSpace: "nowrap",
+        }}>
+          {todo.creator.nom}
+        </span>
+      )}
 
       {/* Supprimer */}
       <fetcher.Form method="post">
@@ -130,6 +156,10 @@ export default function TodoPage() {
   const pending = todos.filter(t => !t.done);
   const done    = todos.filter(t => t.done);
 
+  // Séparer tâches UGC et manuelles dans les en-cours
+  const pendingUgc    = pending.filter(t => t.creator !== null);
+  const pendingManual = pending.filter(t => t.creator === null);
+
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     const form  = e.currentTarget;
     const input = form.querySelector<HTMLInputElement>("[name=title]");
@@ -143,7 +173,7 @@ export default function TodoPage() {
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       boxSizing: "border-box",
     }}>
-      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
@@ -186,18 +216,39 @@ export default function TodoPage() {
           </div>
         </fetcher.Form>
 
-        {/* Liste tâches en cours */}
-        {pending.length > 0 && (
-          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden", boxShadow: T.shadow, marginBottom: 16 }}>
-            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-              {pending.map(t => <TodoItem key={t.id} todo={t} />)}
-            </ul>
-          </div>
-        )}
-
         {todos.length === 0 && (
           <div style={{ textAlign: "center", padding: "48px 24px", color: T.dim, fontSize: 14 }}>
             Aucune tâche pour l'instant — ajoute-en une !
+          </div>
+        )}
+
+        {/* Tâches UGC en cours */}
+        {pendingUgc.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 8 }}>
+              UGC ({pendingUgc.length})
+            </div>
+            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden", boxShadow: T.shadow }}>
+              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                {pendingUgc.map(t => <TodoItem key={t.id} todo={t} />)}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Tâches manuelles en cours */}
+        {pendingManual.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            {pendingUgc.length > 0 && (
+              <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 8 }}>
+                Général ({pendingManual.length})
+              </div>
+            )}
+            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden", boxShadow: T.shadow }}>
+              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                {pendingManual.map(t => <TodoItem key={t.id} todo={t} />)}
+              </ul>
+            </div>
           </div>
         )}
 
