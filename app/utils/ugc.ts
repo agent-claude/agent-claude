@@ -202,16 +202,18 @@ export const PAYS_LABELS: Record<string, string> = {
 
 // ─── Statut colis (shippingStatus) ───────────────────────────────────────────
 
-export const SHIPPING_STATUTS = ["preparation", "envoye", "livre"] as const;
+export const SHIPPING_STATUTS = ["en_attente", "preparation", "envoye", "livre"] as const;
 export type ShippingStatus = typeof SHIPPING_STATUTS[number];
 
 export const SHIPPING_LABELS: Record<string, string> = {
+  en_attente:  "En attente",
   preparation: "En préparation",
   envoye:      "Envoyé",
   livre:       "Livré",
 };
 
 export const SHIPPING_COLORS: Record<string, { color: string; bg: string }> = {
+  en_attente:  { color: "#6b7280", bg: "#f9fafb" },
   preparation: { color: "#b45309", bg: "#fffbeb" },
   envoye:      { color: "#1d4ed8", bg: "#eff6ff" },
   livre:       { color: "#059669", bg: "#f0fdf4" },
@@ -226,7 +228,9 @@ export function normShippingStatus(raw: string): ShippingStatus {
   const r = (raw ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
   if (r.includes("livr") || r === "recu") return "livre";
   if (r.includes("envoy") || r.includes("post")) return "envoye";
-  return "preparation";
+  if (r.includes("attente"))                      return "en_attente";
+  if (r === "preparation" || r === "en_preparation") return "preparation";
+  return "en_attente";
 }
 
 // ─── Statut contenu (contentStatus) ──────────────────────────────────────────
@@ -253,7 +257,7 @@ export function contentStyle(s: string): { color: string; background: string } {
 
 // ─── Statuts legacy (conservés pour CSV import et dashboard) ─────────────────
 
-export const STATUTS = ["preparation", "envoye", "livre"] as const;
+export const STATUTS = ["en_attente", "preparation", "envoye", "livre"] as const;
 export type StatutUGC = typeof STATUTS[number];
 
 export const STATUT_LABELS = SHIPPING_LABELS;

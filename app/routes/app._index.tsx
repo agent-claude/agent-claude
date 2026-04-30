@@ -701,7 +701,7 @@ export default function Dashboard() {
               <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "13px 18px", boxShadow: T.shadow }}>
                 <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 9 }}>Pipeline colis</div>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  {(["preparation","envoye","livre"] as const).map((s, idx, arr) => (
+                  {(["en_attente","preparation","envoye","livre"] as const).map((s, idx, arr) => (
                     <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <div style={{ textAlign: "center" }}>
                         <div style={{ ...shippingStyle(s), borderRadius: 99, padding: "3px 11px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>

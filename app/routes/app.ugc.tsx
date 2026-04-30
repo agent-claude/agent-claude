@@ -86,6 +86,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       port:  acc.port  + c.fraisPort,
       total: acc.total + (c.coutTotalCollab ?? 0),
       // shipping pipeline
+      ship_en_attente:  acc.ship_en_attente  + (c.shippingStatus === "en_attente"  ? 1 : 0),
       ship_preparation: acc.ship_preparation + (c.shippingStatus === "preparation" ? 1 : 0),
       ship_envoye:      acc.ship_envoye      + (c.shippingStatus === "envoye"      ? 1 : 0),
       ship_livre:       acc.ship_livre       + (c.shippingStatus === "livre"       ? 1 : 0),
@@ -95,7 +96,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       cont_poste:       acc.cont_poste       + (c.contentStatus  === "poste"       ? 1 : 0),
     }),
     { cogs: 0, port: 0, total: 0,
-      ship_preparation: 0, ship_envoye: 0, ship_livre: 0,
+      ship_en_attente: 0, ship_preparation: 0, ship_envoye: 0, ship_livre: 0,
       cont_a_faire: 0, cont_recu: 0, cont_poste: 0 },
   );
 
@@ -139,8 +140,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         pays,
         produit,
         quantite,
-        statut:         "preparation",
-        shippingStatus: (form.get("shippingStatus") as string) || "preparation",
+        statut:         "en_attente",
+        shippingStatus: (form.get("shippingStatus") as string) || "en_attente",
         contentStatus:  "a_faire",
         fraisPort:      port,
         trackingNumber: (form.get("trackingNumber") as string) || null,
@@ -546,7 +547,7 @@ export default function UGCPage() {
               Pipeline colis
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {(["preparation", "envoye", "livre"] as const).map((s, idx, arr) => (
+              {(["en_attente", "preparation", "envoye", "livre"] as const).map((s, idx, arr) => (
                 <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ textAlign: "center" }}>
                     <div style={{ ...shippingStyle(s), borderRadius: 99, padding: "3px 12px", fontSize: 12, fontWeight: 700, display: "inline-block" }}>
@@ -617,7 +618,7 @@ export default function UGCPage() {
                 <input name="quantite" type="number" min="1" defaultValue="1" style={inp} />
               </label>
               <label style={lbl}><span style={lbT}>Statut colis</span>
-                <select name="shippingStatus" defaultValue="preparation" style={inp}>
+                <select name="shippingStatus" defaultValue="en_attente" style={inp}>
                   {SHIPPING_STATUTS.map(s => <option key={s} value={s}>{SHIPPING_LABELS[s]}</option>)}
                 </select>
               </label>

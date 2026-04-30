@@ -37,7 +37,7 @@ model Creator {
   pays           String
   produit        String
   statut          String   @default("preparation")
-  shippingStatus  String   @default("preparation")
+  shippingStatus  String   @default("en_attente")
   contentStatus   String   @default("a_faire")
   fraisPort       Float
   trackingNumber  String?
