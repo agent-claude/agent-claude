@@ -262,6 +262,14 @@ function TodoMini({ todo, creatorNom }: { todo: { id: string; title: string; don
 
 // ─── Composant Row éditable ───────────────────────────────────────────────────
 
+// 4 statuts simplifiés (valeurs canoniques stockées en DB)
+const CREATOR_STATUT_OPTIONS = [
+  { value: "en_attente",  label: "En attente"     },
+  { value: "preparation", label: "En préparation" },
+  { value: "envoye",      label: "Envoyé"         },
+  { value: "recu",        label: "Reçu"           },
+] as const;
+
 function CreatorRow({ c, i }: {
   c: { id: string; nom: string; instagram: string; type: string | null; pays: string; produit: string;
        statut: string; fraisPort: number; trackingNumber: string | null; coutProduit: number | null;
@@ -270,13 +278,19 @@ function CreatorRow({ c, i }: {
   i: number;
 }) {
   const [showTodos, setShowTodos] = useState(false);
-  const fetcher     = useFetcher();
-  const statut      = String(fetcher.formData?.get("statut") ?? c.statut);
-  const { color: statutColor, background: statutBg } = statutStyle(statut);
-  const typeLabel   = TYPE_LABELS[c.type ?? ""] ?? c.type ?? "—";
-  const comps       = keyToComps(c.produit, 1);
-  const doneTodos   = c.todos.filter(t => t.done).length;
-  const totalTodos  = c.todos.length;
+  // Fetcher dédié au statut (auto-save sur onChange)
+  const statutFetcher  = useFetcher();
+  // Fetcher pour tracking number (submit manuel)
+  const trackingFetcher = useFetcher();
+
+  // Valeur optimiste : utilise la dernière valeur soumise si disponible
+  const currentStatut = (statutFetcher.formData?.get("statut") as string) ?? normStatut(c.statut);
+  const { color: statutColor, background: statutBg } = statutStyle(currentStatut);
+
+  const typeLabel  = TYPE_LABELS[c.type ?? ""] ?? c.type ?? "—";
+  const comps      = keyToComps(c.produit, 1);
+  const doneTodos  = c.todos.filter(t => t.done).length;
+  const totalTodos = c.todos.length;
 
   return (
   <>
@@ -298,27 +312,36 @@ function CreatorRow({ c, i }: {
       <td style={{ ...cell, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(c.fraisPort)}</td>
       <td style={{ ...cell, color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
       <td style={{ ...cell, color: T.red, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
-      {/* Statut + tracking inline */}
-      <td style={{ ...cell, minWidth: 300 }}>
-        <fetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
+      {/* Statut — auto-save sur onChange via API dédiée */}
+      <td style={cell}>
+        <select
+          value={currentStatut}
+          onChange={e => {
+            statutFetcher.submit(
+              { id: c.id, statut: e.target.value },
+              { method: "POST", action: "/app/api/creator-statut" },
+            );
+          }}
+          style={{ ...inp, width: "auto", fontSize: 12, padding: "3px 7px", background: statutBg, color: statutColor, fontWeight: 700 }}
+        >
+          {CREATOR_STATUT_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+      </td>
+      {/* Tracking — submit manuel */}
+      <td style={{ ...cell, minWidth: 220 }}>
+        <trackingFetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
           <input type="hidden" name="intent" value="update_statut" />
           <input type="hidden" name="id" value={c.id} />
-          <select name="statut" defaultValue={normStatut(c.statut)}
-            style={{ ...inp, width: "auto", fontSize: 12, padding: "3px 7px", background: statutBg, color: statutColor, fontWeight: 700 }}>
-            {STATUTS.map(s => (
-              <option key={s} value={s}>{STATUT_LABELS[s]}</option>
-            ))}
-          </select>
+          <input type="hidden" name="statut" value={currentStatut} />
           <input name="trackingNumber" defaultValue={c.trackingNumber ?? ""} placeholder="N° suivi…"
-            style={{ ...inp, width: 140, fontSize: 12, padding: "3px 7px" }} />
+            style={{ ...inp, width: 150, fontSize: 12, padding: "3px 7px" }} />
           <button type="submit"
             style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
             ✓
           </button>
-        </fetcher.Form>
-      </td>
-      <td style={{ ...cell, fontSize: 11, color: c.trackingNumber ? T.text : T.dim, fontVariantNumeric: "tabular-nums" }}>
-        {c.trackingNumber ?? "—"}
+        </trackingFetcher.Form>
       </td>
       <td style={{ ...cell, color: T.muted, fontSize: 11, maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {c.notes ?? "—"}
@@ -337,11 +360,11 @@ function CreatorRow({ c, i }: {
         ) : <span style={{ color: T.dim, fontSize: 11 }}>—</span>}
       </td>
       <td style={cell}>
-        <fetcher.Form method="post">
+        <trackingFetcher.Form method="post">
           <input type="hidden" name="intent" value="delete" />
           <input type="hidden" name="id" value={c.id} />
           <button type="submit" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13, padding: "2px 6px" }}>✕</button>
-        </fetcher.Form>
+        </trackingFetcher.Form>
       </td>
     </tr>
     {/* Sous-ligne tâches */}
@@ -604,7 +627,7 @@ export default function UGCPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / N° suivi", "Tracking", "Notes", "Tâches", ""].map(h => (
+                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut", "N° suivi", "Notes", "Tâches", ""].map(h => (
                       <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                     ))}
                   </tr>
