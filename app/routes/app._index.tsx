@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { normStatut, STATUT_LABELS, statutStyle } from "../utils/ugc";
 
 // ─── Constantes métier ────────────────────────────────────────────────────────
 
@@ -210,8 +211,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ugcCogs    += cogs(comps);
     ugcShipping += c.fraisPort;
   }
-  const nbCreateurs  = creators.length;
-  const nbPostes     = creators.filter(c => c.statut === "posté").length;
+  const nbCreateurs = creators.length;
+  const nbByStatut  = creators.reduce((acc, c) => {
+    const ns = normStatut(c.statut);
+    acc[ns] = (acc[ns] ?? 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  const nbPublies    = nbByStatut["publie"] ?? 0;
+  const nbPostes     = (nbByStatut["poste"] ?? 0) + nbPublies; // postés + publiés
+  const pctPublie    = nbCreateurs > 0 ? Math.round((nbPublies / nbCreateurs) * 100) : 0;
   const nbContents   = creators.filter(c => c.lienVideo).length;
   const ugcCoutMoyen = nbCreateurs > 0 ? (ugcCogs + ugcShipping) / nbCreateurs : 0;
 
@@ -272,7 +280,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     adsBudget: ADS_BUDGET, seuilAds,
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
     stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
-    nbCreateurs, nbPostes, nbContents, ugcCoutMoyen,
+    nbCreateurs, nbPostes, nbPublies, pctPublie, nbByStatut, nbContents, ugcCoutMoyen,
     ugcComps,
     creators,
     orderBreakdowns: shopify.orderBreakdowns,
@@ -677,13 +685,46 @@ export default function Dashboard() {
             </div>
 
             {/* KPIs */}
-            <div className="g4" style={{ marginBottom: 14 }}>
+            <div className="g4" style={{ marginBottom: 12 }}>
               <MCard label="Créateurs" value={String(d.nbCreateurs)} sub="UGC + influence + café" />
-              <MCard label="Postés" value={String(d.nbPostes)} sub="contenu publié" color={T.green} />
+              <MCard label="Publiés" value={`${d.nbPublies} (${d.pctPublie}%)`} sub={`${d.nbPostes} postés ou publiés`} color={T.green} />
               <MCard label="Coût total UGC" value={eur(d.ugcCogs + d.ugcShipping)}
                 sub={`produits ${eur(d.ugcCogs)} + port ${eur(d.ugcShipping)}`} color={T.red} />
               <MCard label="Coût moyen / créateur" value={eur(d.ugcCoutMoyen)}
                 sub="produit + livraison" color={T.orange} />
+            </div>
+
+            {/* Pipeline statuts */}
+            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "13px 18px", marginBottom: 14, boxShadow: T.shadow }}>
+              <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 9 }}>Pipeline créateurs</div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                {(["preparation","envoye","poste","recu","publie"] as const).map((s, idx, arr) => (
+                  <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ ...statutStyle(s), borderRadius: 99, padding: "3px 11px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
+                        {d.nbByStatut[s] ?? 0}
+                      </div>
+                      <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{STATUT_LABELS[s]}</div>
+                    </div>
+                    {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 13, marginBottom: 14 }}>→</span>}
+                  </div>
+                ))}
+                {(d.nbByStatut["en_attente"] ?? 0) > 0 && (
+                  <>
+                    <span style={{ color: T.dim, fontSize: 11, margin: "0 4px", marginBottom: 14 }}>|</span>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ ...statutStyle("en_attente"), borderRadius: 99, padding: "3px 11px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
+                        {d.nbByStatut["en_attente"]}
+                      </div>
+                      <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{STATUT_LABELS["en_attente"]}</div>
+                    </div>
+                  </>
+                )}
+                <div style={{ marginLeft: "auto", textAlign: "right" }}>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: "#047857" }}>{d.pctPublie}%</span>
+                  <div style={{ fontSize: 10, color: T.dim }}>publiés</div>
+                </div>
+              </div>
             </div>
 
             {/* Composants offerts via UGC */}
@@ -714,8 +755,7 @@ export default function Dashboard() {
                   </thead>
                   <tbody>
                     {d.creators.map((c, i) => {
-                      const statutColor = c.statut === "posté" ? T.green : c.statut === "reçu" ? T.orange : c.statut === "en_preparation" ? "#7c3aed" : T.muted;
-                      const statutBg    = c.statut === "posté" ? T.greenBg : c.statut === "reçu" ? T.orangeBg : c.statut === "en_preparation" ? "#f5f3ff" : "#f1f5f9";
+                      const { color: statutColor, background: statutBg } = statutStyle(c.statut);
                       const typeLabel   = { ugc: "UGC", influence: "Influence", cafe: "Café", autre: "Autre" }[c.type ?? ""] ?? c.type ?? "—";
                       return (
                         <tr key={c.id} style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
@@ -729,7 +769,7 @@ export default function Dashboard() {
                           <td style={{ padding: "8px 12px", color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
                           <td style={{ padding: "8px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
                           <td style={{ padding: "8px 12px" }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: statutBg, color: statutColor }}>{c.statut}</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: statutBg, color: statutColor }}>{STATUT_LABELS[c.statut] ?? c.statut}</span>
                           </td>
                         </tr>
                       );

@@ -7,6 +7,7 @@ import {
   parseUgcProduit, compsToKey, keyToComps, coutComps, coutFromKey,
   ugcShippingFromKey, ugcShippingFromText,
   PRODUIT_LABELS, TYPE_LABELS, PAYS_LABELS,
+  STATUTS, STATUT_LABELS, statutStyle, normStatut,
   eur, fmtComps,
 } from "../utils/ugc";
 
@@ -68,31 +69,30 @@ function normPays(raw: string): string {
   return raw.toUpperCase().slice(0, 2); // fallback : 2 premières lettres
 }
 
-function normStatut(raw: string): string {
-  const t = raw.toLowerCase();
-  if (t.includes("fini") || t.includes("post"))   return "posté";
-  if (t.includes("recu") || t.includes("reçu") || t.includes("livr")) return "reçu";
-  return "envoyé";
-}
-
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const creators = await prisma.creator.findMany({ orderBy: { createdAt: "desc" } });
   const totaux = creators.reduce(
-    (acc, c) => ({
-      cogs:    acc.cogs    + (c.coutProduit     ?? 0),
-      port:    acc.port    + c.fraisPort,
-      total:   acc.total   + (c.coutTotalCollab ?? 0),
-      postés:  acc.postés  + (c.statut === "posté"          ? 1 : 0),
-      envoyés: acc.envoyés + (c.statut === "envoyé"         ? 1 : 0),
-      reçus:   acc.reçus   + (c.statut === "reçu"           ? 1 : 0),
-      enPrep:  acc.enPrep  + (c.statut === "en_preparation" ? 1 : 0),
-    }),
-    { cogs: 0, port: 0, total: 0, postés: 0, envoyés: 0, reçus: 0, enPrep: 0 },
+    (acc, c) => {
+      const ns = normStatut(c.statut);
+      return {
+        cogs:        acc.cogs  + (c.coutProduit ?? 0),
+        port:        acc.port  + c.fraisPort,
+        total:       acc.total + (c.coutTotalCollab ?? 0),
+        preparation: acc.preparation + (ns === "preparation" ? 1 : 0),
+        envoye:      acc.envoye      + (ns === "envoye"      ? 1 : 0),
+        poste:       acc.poste       + (ns === "poste"       ? 1 : 0),
+        recu:        acc.recu        + (ns === "recu"        ? 1 : 0),
+        publie:      acc.publie      + (ns === "publie"      ? 1 : 0),
+        en_attente:  acc.en_attente  + (ns === "en_attente"  ? 1 : 0),
+      };
+    },
+    { cogs: 0, port: 0, total: 0, preparation: 0, envoye: 0, poste: 0, recu: 0, publie: 0, en_attente: 0 },
   );
-  return { creators, totaux };
+  const pctPublie = creators.length > 0 ? Math.round((totaux.publie / creators.length) * 100) : 0;
+  return { creators, totaux, pctPublie };
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         pays,
         produit,
         quantite,
-        statut:         (form.get("statut") as string) || "envoyé",
+        statut:         (form.get("statut") as string) || "preparation",
         fraisPort:      port,
         trackingNumber: (form.get("trackingNumber") as string) || null,
         codePromo:      (form.get("codePromo") as string) || null,
@@ -217,10 +217,9 @@ function CreatorRow({ c, i }: {
        coutTotalCollab: number | null; notes: string | null; };
   i: number;
 }) {
-  const fetcher    = useFetcher();
-  const statut     = String(fetcher.formData?.get("statut") ?? c.statut);
-  const statutColor = statut === "posté" ? T.green : statut === "reçu" ? T.orange : statut === "en_preparation" ? "#7c3aed" : T.muted;
-  const statutBg    = statut === "posté" ? T.greenBg : statut === "reçu" ? T.orangeBg : statut === "en_preparation" ? "#f5f3ff" : "#f1f5f9";
+  const fetcher     = useFetcher();
+  const statut      = String(fetcher.formData?.get("statut") ?? c.statut);
+  const { color: statutColor, background: statutBg } = statutStyle(statut);
   const typeLabel   = TYPE_LABELS[c.type ?? ""] ?? c.type ?? "—";
   const comps       = keyToComps(c.produit, 1);
 
@@ -248,12 +247,11 @@ function CreatorRow({ c, i }: {
         <fetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
           <input type="hidden" name="intent" value="update_statut" />
           <input type="hidden" name="id" value={c.id} />
-          <select name="statut" defaultValue={c.statut}
+          <select name="statut" defaultValue={normStatut(c.statut)}
             style={{ ...inp, width: "auto", fontSize: 12, padding: "3px 7px", background: statutBg, color: statutColor, fontWeight: 700 }}>
-            <option value="en_preparation">En préparation</option>
-            <option value="envoyé">Envoyé</option>
-            <option value="reçu">Reçu</option>
-            <option value="posté">Posté</option>
+            {STATUTS.map(s => (
+              <option key={s} value={s}>{STATUT_LABELS[s]}</option>
+            ))}
           </select>
           <input name="lienVideo" defaultValue={c.lienVideo ?? ""} placeholder="URL vidéo..."
             style={{ ...inp, width: 150, fontSize: 12, padding: "3px 7px" }} />
@@ -285,7 +283,7 @@ function CreatorRow({ c, i }: {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function UGCPage() {
-  const { creators, totaux } = useLoaderData<typeof loader>();
+  const { creators, totaux, pctPublie } = useLoaderData<typeof loader>();
   const nav        = useNavigation();
   const csvFetcher = useFetcher<{ importResult: string }>();
   const fileRef    = useRef<HTMLInputElement>(null);
@@ -392,13 +390,13 @@ export default function UGCPage() {
           </div>
         )}
 
-        {/* Totaux */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+        {/* KPIs */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 12 }}>
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px 18px", boxShadow: T.shadow }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Total créateurs</div>
             <div style={{ fontSize: 24, fontWeight: 700, color: T.text }}>{creators.length}</div>
             <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
-              {totaux.postés} postés · {totaux.reçus} reçus · {totaux.envoyés} envoyés · {totaux.enPrep} en prépa
+              {totaux.publie} publiés · {pctPublie}% taux publication
             </div>
           </div>
           <div style={{ background: T.redBg, border: `1px solid ${T.redBdr}`, borderRadius: 14, padding: "16px 18px" }}>
@@ -412,6 +410,39 @@ export default function UGCPage() {
           <div style={{ background: T.redBg, border: `1px solid ${T.redBdr}`, borderRadius: 14, padding: "16px 18px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Total UGC</div>
             <div style={{ fontSize: 24, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.total)}</div>
+          </div>
+        </div>
+
+        {/* Pipeline statuts */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 18px", marginBottom: 24, boxShadow: T.shadow }}>
+          <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 10 }}>Pipeline</div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {(["preparation","envoye","poste","recu","publie"] as const).map((s, idx, arr) => (
+              <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ ...statutStyle(s), borderRadius: 99, padding: "3px 12px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
+                    {totaux[s]}
+                  </div>
+                  <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>{STATUT_LABELS[s]}</div>
+                </div>
+                {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 14, marginBottom: 14 }}>→</span>}
+              </div>
+            ))}
+            {totaux.en_attente > 0 && (
+              <>
+                <span style={{ color: T.dim, fontSize: 12, margin: "0 4px", marginBottom: 14 }}>|</span>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ ...statutStyle("en_attente"), borderRadius: 99, padding: "3px 12px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
+                    {totaux.en_attente}
+                  </div>
+                  <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>{STATUT_LABELS["en_attente"]}</div>
+                </div>
+              </>
+            )}
+            <div style={{ marginLeft: "auto", textAlign: "right" }}>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#047857" }}>{pctPublie}%</div>
+              <div style={{ fontSize: 10, color: T.dim }}>publiés</div>
+            </div>
           </div>
         </div>
 
@@ -451,10 +482,10 @@ export default function UGCPage() {
                 <input name="quantite" type="number" min="1" defaultValue="1" style={inp} />
               </label>
               <label style={lbl}><span style={lbT}>Statut</span>
-                <select name="statut" style={inp}>
-                  <option value="envoyé">Envoyé</option>
-                  <option value="reçu">Reçu</option>
-                  <option value="posté">Posté</option>
+                <select name="statut" defaultValue="preparation" style={inp}>
+                  {STATUTS.map(s => (
+                    <option key={s} value={s}>{STATUT_LABELS[s]}</option>
+                  ))}
                 </select>
               </label>
               <label style={lbl}><span style={lbT}>Frais port (auto si vide)</span>

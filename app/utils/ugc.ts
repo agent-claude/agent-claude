@@ -199,6 +199,57 @@ export const PAYS_LABELS: Record<string, string> = {
   CH: "Suisse",
 };
 
+// ─── Statuts UGC ─────────────────────────────────────────────────────────────
+
+export const STATUTS = ["preparation", "envoye", "poste", "recu", "publie", "en_attente"] as const;
+export type StatutUGC = typeof STATUTS[number];
+
+export const STATUT_LABELS: Record<string, string> = {
+  preparation:    "En préparation",
+  envoye:         "Envoyé",
+  poste:          "Posté",
+  recu:           "Reçu",
+  publie:         "Publié",
+  en_attente:     "En attente",
+  // Legacy (accents)
+  en_preparation: "En préparation",
+  "envoyé":       "Envoyé",
+  "posté":        "Posté",
+  "reçu":         "Reçu",
+  "publié":       "Publié",
+};
+
+export const STATUT_COLORS: Record<string, { color: string; bg: string }> = {
+  preparation:    { color: "#b45309", bg: "#fffbeb" },
+  en_preparation: { color: "#b45309", bg: "#fffbeb" },
+  envoye:         { color: "#1d4ed8", bg: "#eff6ff" },
+  "envoyé":       { color: "#1d4ed8", bg: "#eff6ff" },
+  poste:          { color: "#7c3aed", bg: "#f5f3ff" },
+  "posté":        { color: "#7c3aed", bg: "#f5f3ff" },
+  recu:           { color: "#0e7490", bg: "#ecfeff" },
+  "reçu":         { color: "#0e7490", bg: "#ecfeff" },
+  publie:         { color: "#047857", bg: "#ecfdf5" },
+  "publié":       { color: "#047857", bg: "#ecfdf5" },
+  en_attente:     { color: "#6b7280", bg: "#f9fafb" },
+};
+
+export function statutStyle(statut: string): { color: string; background: string } {
+  const c = STATUT_COLORS[statut] ?? { color: "#6b7280", bg: "#f9fafb" };
+  return { color: c.color, background: c.bg };
+}
+
+export function normStatut(raw: string): string {
+  const r = (raw ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+  if (r === "preparation" || r === "en_preparation") return "preparation";
+  if (r.includes("publi"))                           return "publie";
+  if (r.includes("post"))                            return "poste";
+  if (r.includes("recu") || r.includes("livr"))     return "recu";
+  if (r.includes("envoy"))                           return "envoye";
+  if (r.includes("attente"))                         return "en_attente";
+  if ((STATUTS as readonly string[]).includes(r))    return r;
+  return "preparation";
+}
+
 // ─── Formatage ────────────────────────────────────────────────────────────────
 
 export function eur(n: number): string {

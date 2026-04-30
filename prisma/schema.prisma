@@ -36,7 +36,7 @@ model Creator {
   plateforme     String?
   pays           String
   produit        String
-  statut         String   @default("envoyé")
+  statut         String   @default("preparation")
   fraisPort      Float
   lienVideo      String?
   trackingNumber  String?
