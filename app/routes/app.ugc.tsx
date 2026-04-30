@@ -7,7 +7,9 @@ import {
   parseUgcProduit, compsToKey, keyToComps, coutComps, coutFromKey,
   ugcShippingFromKey, ugcShippingFromText,
   PRODUIT_LABELS, TYPE_LABELS, PAYS_LABELS,
-  STATUTS, STATUT_LABELS, statutStyle, normStatut,
+  SHIPPING_STATUTS, SHIPPING_LABELS, shippingStyle,
+  CONTENT_STATUTS, CONTENT_LABELS, contentStyle,
+  normShippingStatus,
   eur, fmtComps,
 } from "../utils/ugc";
 
@@ -38,9 +40,9 @@ function parseCsv(text: string): CsvRow[] {
     const cells: string[] = [];
     let cur = "", inQ = false;
     for (const ch of line) {
-      if (ch === '"')          { inQ = !inQ; }
+      if (ch === '"')              { inQ = !inQ; }
       else if (ch === sep && !inQ) { cells.push(cur.trim()); cur = ""; }
-      else                     { cur += ch; }
+      else                         { cur += ch; }
     }
     cells.push(cur.trim());
     return cells;
@@ -59,14 +61,14 @@ function parseCsv(text: string): CsvRow[] {
 }
 
 function normPays(raw: string): string {
-  const t = raw.toLowerCase().split(",")[0].trim(); // "france, bordeaux" → "france"
+  const t = raw.toLowerCase().split(",")[0].trim();
   if (t.includes("france")) return "FR";
   if (t.includes("belg"))   return "BE";
   if (t.includes("ital"))   return "IT";
   if (t.includes("portug")) return "PT";
   if (t.includes("allem") || t.includes("germany")) return "DE";
   if (t.includes("suisse") || t.includes("swiss"))  return "CH";
-  return raw.toUpperCase().slice(0, 2); // fallback : 2 premières lettres
+  return raw.toUpperCase().slice(0, 2);
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -77,25 +79,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderBy: { createdAt: "desc" },
     include: { todos: { orderBy: { createdAt: "asc" } } },
   });
+
   const totaux = creators.reduce(
-    (acc, c) => {
-      const ns = normStatut(c.statut);
-      return {
-        cogs:        acc.cogs  + (c.coutProduit ?? 0),
-        port:        acc.port  + c.fraisPort,
-        total:       acc.total + (c.coutTotalCollab ?? 0),
-        preparation: acc.preparation + (ns === "preparation" ? 1 : 0),
-        envoye:      acc.envoye      + (ns === "envoye"      ? 1 : 0),
-        poste:       acc.poste       + (ns === "poste"       ? 1 : 0),
-        recu:        acc.recu        + (ns === "recu"        ? 1 : 0),
-        publie:      acc.publie      + (ns === "publie"      ? 1 : 0),
-        en_attente:  acc.en_attente  + (ns === "en_attente"  ? 1 : 0),
-      };
-    },
-    { cogs: 0, port: 0, total: 0, preparation: 0, envoye: 0, poste: 0, recu: 0, publie: 0, en_attente: 0 },
+    (acc, c) => ({
+      cogs:  acc.cogs  + (c.coutProduit ?? 0),
+      port:  acc.port  + c.fraisPort,
+      total: acc.total + (c.coutTotalCollab ?? 0),
+      // shipping pipeline
+      ship_preparation: acc.ship_preparation + (c.shippingStatus === "preparation" ? 1 : 0),
+      ship_envoye:      acc.ship_envoye      + (c.shippingStatus === "envoye"      ? 1 : 0),
+      ship_livre:       acc.ship_livre       + (c.shippingStatus === "livre"       ? 1 : 0),
+      // content pipeline
+      cont_a_faire:     acc.cont_a_faire     + (c.contentStatus  === "a_faire"     ? 1 : 0),
+      cont_recu:        acc.cont_recu        + (c.contentStatus  === "recu"        ? 1 : 0),
+      cont_poste:       acc.cont_poste       + (c.contentStatus  === "poste"       ? 1 : 0),
+    }),
+    { cogs: 0, port: 0, total: 0,
+      ship_preparation: 0, ship_envoye: 0, ship_livre: 0,
+      cont_a_faire: 0, cont_recu: 0, cont_poste: 0 },
   );
-  const pctPublie = creators.length > 0 ? Math.round((totaux.publie / creators.length) * 100) : 0;
-  return { creators, totaux, pctPublie };
+
+  return { creators, totaux };
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -110,15 +114,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return null;
   }
 
-  if (intent === "update_statut") {
+  if (intent === "update_tracking") {
+    const id             = form.get("id") as string;
     const trackingNumber = (form.get("trackingNumber") as string) || null;
-    const rawStatut      = form.get("statut") as string;
-    // Auto-avancer à "envoye" si un numéro de suivi est saisi et qu'on est en preparation
-    const statut = (trackingNumber && rawStatut === "preparation") ? "envoye" : rawStatut;
-    await prisma.creator.update({
-      where: { id: form.get("id") as string },
-      data: { statut, trackingNumber },
-    });
+    const data: Record<string, unknown> = { trackingNumber };
+    // auto-avancer le statut colis quand un numéro est saisi
+    if (trackingNumber) {
+      const current = await prisma.creator.findUnique({ where: { id }, select: { shippingStatus: true } });
+      if (current?.shippingStatus === "preparation") data.shippingStatus = "envoye";
+    }
+    await prisma.creator.update({ where: { id }, data });
     return null;
   }
 
@@ -128,8 +133,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const quantite = parseInt(form.get("quantite") as string, 10) || 1;
     const cp       = coutFromKey(produit, quantite);
     const port     = parseFloat(form.get("fraisPort") as string) || ugcShippingFromKey(pays, produit, quantite);
+    const nom      = (form.get("nom") as string).trim();
 
-    const nom = (form.get("nom") as string).trim();
     const creator = await prisma.creator.create({
       data: {
         nom,
@@ -140,7 +145,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         pays,
         produit,
         quantite,
-        statut:         (form.get("statut") as string) || "preparation",
+        statut:         "preparation",
+        shippingStatus: (form.get("shippingStatus") as string) || "preparation",
+        contentStatus:  "a_faire",
         fraisPort:      port,
         trackingNumber: (form.get("trackingNumber") as string) || null,
         codePromo:      (form.get("codePromo") as string) || null,
@@ -150,14 +157,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         coutTotalCollab: cp + port,
       },
     });
-    // Auto-créer les tâches logistiques liées
     await prisma.todo.createMany({
       data: [
-        { title: `Préparer colis — ${nom}`,           creatorId: creator.id },
-        { title: `Envoyer colis — ${nom}`,             creatorId: creator.id },
-        { title: `Ajouter numéro de suivi — ${nom}`,  creatorId: creator.id },
-        { title: `Relancer ${nom} pour le contenu`,   creatorId: creator.id },
-        { title: `Poster le contenu de ${nom}`,       creatorId: creator.id },
+        { title: `Préparer colis — ${nom}`,          creatorId: creator.id },
+        { title: `Envoyer colis — ${nom}`,            creatorId: creator.id },
+        { title: `Ajouter numéro de suivi — ${nom}`, creatorId: creator.id },
+        { title: `Relancer ${nom} pour le contenu`,  creatorId: creator.id },
+        { title: `Poster le contenu de ${nom}`,      creatorId: creator.id },
       ],
     });
     return null;
@@ -166,7 +172,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "import_csv") {
     const rows: CsvRow[] = JSON.parse(form.get("rows") as string);
     let imported = 0;
-
     for (const row of rows) {
       const pays     = normPays(row.paysRaw ?? "");
       const comps    = parseUgcProduit(row.produitRaw ?? "");
@@ -174,7 +179,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const cp       = coutComps(comps);
       const csvPort  = parseFloat((row.fraisPortRaw ?? "").replace(",", "."));
       const port     = !isNaN(csvPort) && csvPort > 0 ? csvPort : ugcShippingFromText(pays, row.produitRaw ?? "");
-      const statut   = normStatut(row.statutRaw ?? "");
+      const shipping = normShippingStatus(row.statutRaw ?? "");
 
       await prisma.creator.create({
         data: {
@@ -186,12 +191,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           pays,
           produit,
           quantite:       1,
-          statut,
+          statut:         shipping,
+          shippingStatus: shipping,
+          contentStatus:  "a_faire",
           fraisPort:      port,
           trackingNumber: row.trackingNumber || null,
           codePromo:      row.codePromo || null,
           dateLivraison:  row.dateLivraison || null,
-            coutProduit:    cp,
+          coutProduit:    cp,
           coutTotalCollab: cp + port,
         },
       });
@@ -220,14 +227,13 @@ const inp: React.CSSProperties = {
 };
 const lbl: React.CSSProperties  = { display: "flex", flexDirection: "column", gap: 5 };
 const lbT: React.CSSProperties  = { fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" };
-const cell: React.CSSProperties = { padding: "8px 12px", color: "#0f172a" };
+const cell: React.CSSProperties = { padding: "8px 10px", color: "#0f172a" };
 
-// ─── Mini todo (dans la ligne UGC) ───────────────────────────────────────────
+// ─── Mini todo ────────────────────────────────────────────────────────────────
 
 function TodoMini({ todo, creatorNom }: { todo: { id: string; title: string; done: boolean }; creatorNom: string }) {
   const fetcher = useFetcher();
   const optimisticDone = fetcher.formData?.get("intent") === "toggle" ? !todo.done : todo.done;
-  // Afficher le titre sans le nom du créateur (déjà visible dans la ligne)
   const label = todo.title
     .replace(` — ${creatorNom}`, "")
     .replace(`${creatorNom} `, "")
@@ -260,117 +266,142 @@ function TodoMini({ todo, creatorNom }: { todo: { id: string; title: string; don
   );
 }
 
-// ─── Composant Row éditable ───────────────────────────────────────────────────
+// ─── Row créateur ─────────────────────────────────────────────────────────────
 
-// 4 statuts simplifiés (valeurs canoniques stockées en DB)
-const CREATOR_STATUT_OPTIONS = [
-  { value: "en_attente",  label: "En attente"     },
-  { value: "preparation", label: "En préparation" },
-  { value: "envoye",      label: "Envoyé"         },
-  { value: "recu",        label: "Reçu"           },
-] as const;
+type CreatorData = {
+  id: string; nom: string; instagram: string; type: string | null;
+  pays: string; produit: string; fraisPort: number;
+  trackingNumber: string | null; coutProduit: number | null;
+  coutTotalCollab: number | null; notes: string | null;
+  shippingStatus: string; contentStatus: string;
+  todos: { id: string; title: string; done: boolean }[];
+};
 
-function CreatorRow({ c, i }: {
-  c: { id: string; nom: string; instagram: string; type: string | null; pays: string; produit: string;
-       statut: string; fraisPort: number; trackingNumber: string | null; coutProduit: number | null;
-       coutTotalCollab: number | null; notes: string | null;
-       todos: { id: string; title: string; done: boolean }[] };
-  i: number;
-}) {
+function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
   const [showTodos, setShowTodos] = useState(false);
-  // Fetcher dédié au statut (auto-save sur onChange)
-  const statutFetcher  = useFetcher();
-  // Fetcher pour tracking number (submit manuel)
-  const trackingFetcher = useFetcher();
+  const shipFetcher    = useFetcher();
+  const contFetcher    = useFetcher();
+  const trackFetcher   = useFetcher();
 
-  // Valeur optimiste : utilise la dernière valeur soumise si disponible
-  const currentStatut = (statutFetcher.formData?.get("statut") as string) ?? normStatut(c.statut);
-  const { color: statutColor, background: statutBg } = statutStyle(currentStatut);
+  const currentShipping = (shipFetcher.formData?.get("shippingStatus") as string) ?? c.shippingStatus;
+  const currentContent  = (contFetcher.formData?.get("contentStatus")  as string) ?? c.contentStatus;
+
+  const { color: shipColor, background: shipBg }  = shippingStyle(currentShipping);
+  const { color: contColor, background: contBg }  = contentStyle(currentContent);
 
   const typeLabel  = TYPE_LABELS[c.type ?? ""] ?? c.type ?? "—";
   const comps      = keyToComps(c.produit, 1);
   const doneTodos  = c.todos.filter(t => t.done).length;
   const totalTodos = c.todos.length;
 
+  const selectStyle = (bg: string, color: string): React.CSSProperties => ({
+    ...inp, width: "auto", fontSize: 11, padding: "3px 6px",
+    background: bg, color, fontWeight: 700, cursor: "pointer",
+  });
+
   return (
   <>
     <tr style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
-      <td style={{ ...cell, fontWeight: 600 }}>
+      {/* Nom */}
+      <td style={{ ...cell, fontWeight: 600, minWidth: 120 }}>
         <div>{c.nom}</div>
         {c.instagram && <div style={{ fontSize: 11, color: T.muted }}>{c.instagram}</div>}
       </td>
+
+      {/* Type */}
       <td style={cell}>
         <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 99, background: "#eef2ff", color: T.accent }}>
           {typeLabel}
         </span>
       </td>
+
+      {/* Pays */}
       <td style={{ ...cell, color: T.muted }}>{PAYS_LABELS[c.pays] ?? c.pays}</td>
+
+      {/* Produit */}
       <td style={cell}>
         <div style={{ fontSize: 12 }}>{PRODUIT_LABELS[c.produit] ?? c.produit}</div>
         <div style={{ fontSize: 11, color: T.muted }}>{fmtComps(comps)}</div>
       </td>
+
+      {/* Coûts */}
       <td style={{ ...cell, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(c.fraisPort)}</td>
       <td style={{ ...cell, color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
       <td style={{ ...cell, color: T.red, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
-      {/* Statut — auto-save sur onChange via API dédiée */}
+
+      {/* Statut colis */}
       <td style={cell}>
         <select
-          value={currentStatut}
-          onChange={e => {
-            statutFetcher.submit(
-              { id: c.id, statut: e.target.value },
-              { method: "POST", action: "/app/api/creator-statut" },
-            );
-          }}
-          style={{ ...inp, width: "auto", fontSize: 12, padding: "3px 7px", background: statutBg, color: statutColor, fontWeight: 700 }}
+          value={currentShipping}
+          onChange={e => shipFetcher.submit(
+            { id: c.id, shippingStatus: e.target.value },
+            { method: "POST", action: "/app/api/creator-statut" },
+          )}
+          style={selectStyle(shipBg, shipColor)}
         >
-          {CREATOR_STATUT_OPTIONS.map(({ value, label }) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
+          {SHIPPING_STATUTS.map(s => <option key={s} value={s}>{SHIPPING_LABELS[s]}</option>)}
         </select>
       </td>
-      {/* Tracking — submit manuel */}
-      <td style={{ ...cell, minWidth: 220 }}>
-        <trackingFetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <input type="hidden" name="intent" value="update_statut" />
+
+      {/* Statut contenu */}
+      <td style={cell}>
+        <select
+          value={currentContent}
+          onChange={e => contFetcher.submit(
+            { id: c.id, contentStatus: e.target.value },
+            { method: "POST", action: "/app/api/creator-statut" },
+          )}
+          style={selectStyle(contBg, contColor)}
+        >
+          {CONTENT_STATUTS.map(s => <option key={s} value={s}>{CONTENT_LABELS[s]}</option>)}
+        </select>
+      </td>
+
+      {/* Tracking */}
+      <td style={{ ...cell, minWidth: 200 }}>
+        <trackFetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
+          <input type="hidden" name="intent" value="update_tracking" />
           <input type="hidden" name="id" value={c.id} />
-          <input type="hidden" name="statut" value={currentStatut} />
           <input name="trackingNumber" defaultValue={c.trackingNumber ?? ""} placeholder="N° suivi…"
-            style={{ ...inp, width: 150, fontSize: 12, padding: "3px 7px" }} />
+            style={{ ...inp, width: 140, fontSize: 12, padding: "3px 7px" }} />
           <button type="submit"
             style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
             ✓
           </button>
-        </trackingFetcher.Form>
+        </trackFetcher.Form>
       </td>
-      <td style={{ ...cell, color: T.muted, fontSize: 11, maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+
+      {/* Notes */}
+      <td style={{ ...cell, color: T.muted, fontSize: 11, maxWidth: 140, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {c.notes ?? "—"}
       </td>
+
       {/* Tâches */}
       <td style={cell}>
         {totalTodos > 0 ? (
           <button type="button" onClick={() => setShowTodos(v => !v)} style={{
             background: "none", border: `1px solid ${T.border}`, borderRadius: 8,
             padding: "3px 9px", fontSize: 11, cursor: "pointer", fontWeight: 600,
-            color: doneTodos === totalTodos ? T.green : T.muted,
-            whiteSpace: "nowrap",
+            color: doneTodos === totalTodos ? T.green : T.muted, whiteSpace: "nowrap",
           }}>
             {doneTodos}/{totalTodos} {showTodos ? "▲" : "▼"}
           </button>
         ) : <span style={{ color: T.dim, fontSize: 11 }}>—</span>}
       </td>
+
+      {/* Supprimer */}
       <td style={cell}>
-        <trackingFetcher.Form method="post">
+        <trackFetcher.Form method="post">
           <input type="hidden" name="intent" value="delete" />
           <input type="hidden" name="id" value={c.id} />
           <button type="submit" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13, padding: "2px 6px" }}>✕</button>
-        </trackingFetcher.Form>
+        </trackFetcher.Form>
       </td>
     </tr>
-    {/* Sous-ligne tâches */}
+
     {showTodos && totalTodos > 0 && (
       <tr style={{ background: "#f8fafc" }}>
-        <td colSpan={12} style={{ padding: "8px 16px 12px 24px", borderBottom: `1px solid ${T.border}` }}>
+        <td colSpan={13} style={{ padding: "8px 16px 12px 24px", borderBottom: `1px solid ${T.border}` }}>
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: "2px 24px" }}>
             {c.todos.map(t => <TodoMini key={t.id} todo={t} creatorNom={c.nom} />)}
           </ul>
@@ -384,7 +415,7 @@ function CreatorRow({ c, i }: {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function UGCPage() {
-  const { creators, totaux, pctPublie } = useLoaderData<typeof loader>();
+  const { creators, totaux } = useLoaderData<typeof loader>();
   const nav        = useNavigation();
   const csvFetcher = useFetcher<{ importResult: string }>();
   const fileRef    = useRef<HTMLInputElement>(null);
@@ -395,10 +426,7 @@ export default function UGCPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => {
-      const rows = parseCsv(ev.target?.result as string);
-      setCsvPreview(rows);
-    };
+    reader.onload = ev => setCsvPreview(parseCsv(ev.target?.result as string));
     reader.readAsText(file, "UTF-8");
   }
 
@@ -412,7 +440,12 @@ export default function UGCPage() {
   return (
     <div style={{ minHeight: "100vh", background: T.bg, padding: "32px 24px 60px",
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', boxSizing: "border-box" }}>
-      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1160, margin: "0 auto" }}>
+
+        {/* VERSION BANNER — à supprimer une fois confirmé */}
+        <div style={{ background: "#fbbf24", color: "#1c1917", fontWeight: 700, fontSize: 13, padding: "8px 16px", borderRadius: 8, marginBottom: 16, letterSpacing: "0.05em" }}>
+          ✓ VERSION UGC STATUTS SEPARES (colis + contenu)
+        </div>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28, flexWrap: "wrap", gap: 8 }}>
@@ -449,7 +482,7 @@ export default function UGCPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Nom", "Pays", "Produit brut", "→ Clé", "Composants", "Port calculé", "Statut"].map(h => (
+                    {["Nom", "Pays", "Produit brut", "→ Clé", "Composants", "Port calculé", "Statut colis"].map(h => (
                       <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                     ))}
                   </tr>
@@ -470,7 +503,7 @@ export default function UGCPage() {
                         </td>
                         <td style={{ padding: "6px 10px", fontSize: 11, color: T.green }}>{fmtComps(comps)}</td>
                         <td style={{ padding: "6px 10px", fontVariantNumeric: "tabular-nums" }}>{eur(port)}</td>
-                        <td style={{ padding: "6px 10px", color: T.muted }}>{normStatut(r.statutRaw ?? "")}</td>
+                        <td style={{ padding: "6px 10px", color: T.muted }}>{normShippingStatus(r.statutRaw ?? "")}</td>
                       </tr>
                     );
                   })}
@@ -478,8 +511,7 @@ export default function UGCPage() {
               </table>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" onClick={confirmImport}
-                disabled={csvFetcher.state === "submitting"}
+              <button type="button" onClick={confirmImport} disabled={csvFetcher.state === "submitting"}
                 style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 9, padding: "9px 18px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>
                 {csvFetcher.state === "submitting" ? "Import…" : "Confirmer l'import"}
               </button>
@@ -496,9 +528,7 @@ export default function UGCPage() {
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px 18px", boxShadow: T.shadow }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Total créateurs</div>
             <div style={{ fontSize: 24, fontWeight: 700, color: T.text }}>{creators.length}</div>
-            <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
-              {totaux.publie} publiés · {pctPublie}% taux publication
-            </div>
+            <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{totaux.ship_livre} livrés · {totaux.cont_poste} postés</div>
           </div>
           <div style={{ background: T.redBg, border: `1px solid ${T.redBdr}`, borderRadius: 14, padding: "16px 18px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>COGS produits</div>
@@ -514,35 +544,45 @@ export default function UGCPage() {
           </div>
         </div>
 
-        {/* Pipeline statuts */}
-        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 18px", marginBottom: 24, boxShadow: T.shadow }}>
-          <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 10 }}>Pipeline</div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            {(["preparation","envoye","poste","recu","publie"] as const).map((s, idx, arr) => (
-              <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ ...statutStyle(s), borderRadius: 99, padding: "3px 12px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
-                    {totaux[s]}
+        {/* Pipeline double */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
+          {/* Pipeline colis */}
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 18px", boxShadow: T.shadow }}>
+            <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 10 }}>
+              Pipeline colis
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {(["preparation", "envoye", "livre"] as const).map((s, idx, arr) => (
+                <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ ...shippingStyle(s), borderRadius: 99, padding: "3px 12px", fontSize: 12, fontWeight: 700, display: "inline-block" }}>
+                      {totaux[`ship_${s}` as keyof typeof totaux]}
+                    </div>
+                    <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>{SHIPPING_LABELS[s]}</div>
                   </div>
-                  <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>{STATUT_LABELS[s]}</div>
+                  {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 14, marginBottom: 14 }}>→</span>}
                 </div>
-                {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 14, marginBottom: 14 }}>→</span>}
-              </div>
-            ))}
-            {totaux.en_attente > 0 && (
-              <>
-                <span style={{ color: T.dim, fontSize: 12, margin: "0 4px", marginBottom: 14 }}>|</span>
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ ...statutStyle("en_attente"), borderRadius: 99, padding: "3px 12px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
-                    {totaux.en_attente}
+              ))}
+            </div>
+          </div>
+
+          {/* Pipeline contenu */}
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 18px", boxShadow: T.shadow }}>
+            <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 10 }}>
+              Pipeline contenu
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {(["a_faire", "recu", "poste"] as const).map((s, idx, arr) => (
+                <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ ...contentStyle(s), borderRadius: 99, padding: "3px 12px", fontSize: 12, fontWeight: 700, display: "inline-block" }}>
+                      {totaux[`cont_${s}` as keyof typeof totaux]}
+                    </div>
+                    <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>{CONTENT_LABELS[s]}</div>
                   </div>
-                  <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>{STATUT_LABELS["en_attente"]}</div>
+                  {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 14, marginBottom: 14 }}>→</span>}
                 </div>
-              </>
-            )}
-            <div style={{ marginLeft: "auto", textAlign: "right" }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: "#047857" }}>{pctPublie}%</div>
-              <div style={{ fontSize: 10, color: T.dim }}>publiés</div>
+              ))}
             </div>
           </div>
         </div>
@@ -582,11 +622,9 @@ export default function UGCPage() {
               <label style={lbl}><span style={lbT}>Qté</span>
                 <input name="quantite" type="number" min="1" defaultValue="1" style={inp} />
               </label>
-              <label style={lbl}><span style={lbT}>Statut</span>
-                <select name="statut" defaultValue="preparation" style={inp}>
-                  {STATUTS.map(s => (
-                    <option key={s} value={s}>{STATUT_LABELS[s]}</option>
-                  ))}
+              <label style={lbl}><span style={lbT}>Statut colis</span>
+                <select name="shippingStatus" defaultValue="preparation" style={inp}>
+                  {SHIPPING_STATUTS.map(s => <option key={s} value={s}>{SHIPPING_LABELS[s]}</option>)}
                 </select>
               </label>
               <label style={lbl}><span style={lbT}>Frais port (auto si vide)</span>
@@ -598,16 +636,8 @@ export default function UGCPage() {
               <label style={lbl}><span style={lbT}>Code promo</span>
                 <input name="codePromo" placeholder="ex: ANAIS10" style={inp} />
               </label>
-              <label style={lbl}><span style={lbT}>Date livraison</span>
-                <input name="dateLivraison" type="date" style={inp} />
-              </label>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-              <label style={lbl}><span style={lbT}>N° suivi (Colissimo, Mondial Relay…)</span>
-                <input name="trackingNumber" placeholder="ex: 1A00123456789" style={inp} />
-              </label>
               <label style={lbl}><span style={lbT}>Notes</span>
-                <input name="notes" placeholder="ex: 2 vidéos, contrat à faire..." style={inp} />
+                <input name="notes" placeholder="ex: 2 vidéos, contrat..." style={inp} />
               </label>
             </div>
             <button type="submit" disabled={submitting} style={{
@@ -627,8 +657,8 @@ export default function UGCPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut", "N° suivi", "Notes", "Tâches", ""].map(h => (
-                      <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Colis", "Contenu", "N° suivi", "Notes", "Tâches", ""].map(h => (
+                      <th key={h} style={{ padding: "10px 10px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -637,11 +667,11 @@ export default function UGCPage() {
                 </tbody>
                 <tfoot>
                   <tr style={{ background: "#f1f5f9", borderTop: `2px solid ${T.border}` }}>
-                    <td colSpan={4} style={{ padding: "10px 12px", fontWeight: 700, color: T.text }}>Total</td>
-                    <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.port)}</td>
-                    <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.cogs)}</td>
-                    <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.total)}</td>
-                    <td colSpan={4} />
+                    <td colSpan={4} style={{ padding: "10px 10px", fontWeight: 700, color: T.text }}>Total</td>
+                    <td style={{ padding: "10px 10px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.port)}</td>
+                    <td style={{ padding: "10px 10px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.cogs)}</td>
+                    <td style={{ padding: "10px 10px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.total)}</td>
+                    <td colSpan={6} />
                   </tr>
                 </tfoot>
               </table>
@@ -653,5 +683,3 @@ export default function UGCPage() {
     </div>
   );
 }
-
-

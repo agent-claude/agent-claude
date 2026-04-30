@@ -2,7 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { normStatut, STATUT_LABELS, statutStyle } from "../utils/ugc";
+import { SHIPPING_LABELS, shippingStyle, CONTENT_LABELS, contentStyle } from "../utils/ugc";
 
 // ─── Constantes métier ────────────────────────────────────────────────────────
 
@@ -193,8 +193,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     fetchShopifyOrders(admin as AdminClient, session.shop),
     safeGet(() => prisma.creator.findMany({ orderBy: { createdAt: "asc" } }), [] as Array<{
       id: string; nom: string; instagram: string; type: string | null; pays: string;
-      produit: string; quantite: number; statut: string; fraisPort: number;
-      trackingNumber: string | null; coutProduit: number | null; coutTotalCollab: number | null; notes: string | null;
+      produit: string; quantite: number; statut: string;
+      shippingStatus: string; contentStatus: string;
+      fraisPort: number; trackingNumber: string | null;
+      coutProduit: number | null; coutTotalCollab: number | null; notes: string | null;
       codePromo: string | null; dateLivraison: string | null;
     }>),
     safeGet(() => prisma.produitOffert.findMany({ orderBy: { date: "desc" } }),
@@ -212,14 +214,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ugcShipping += c.fraisPort;
   }
   const nbCreateurs = creators.length;
-  const nbByStatut  = creators.reduce((acc, c) => {
-    const ns = normStatut(c.statut);
-    acc[ns] = (acc[ns] ?? 0) + 1;
+  const nbByShipping = creators.reduce((acc, c) => {
+    acc[c.shippingStatus] = (acc[c.shippingStatus] ?? 0) + 1;
     return acc;
   }, {} as Record<string, number>);
-  const nbPublies    = nbByStatut["publie"] ?? 0;
-  const nbPostes     = (nbByStatut["poste"] ?? 0) + nbPublies; // postés + publiés
-  const pctPublie    = nbCreateurs > 0 ? Math.round((nbPublies / nbCreateurs) * 100) : 0;
+  const nbByContent = creators.reduce((acc, c) => {
+    acc[c.contentStatus] = (acc[c.contentStatus] ?? 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
   const nbContents   = creators.filter(c => c.trackingNumber).length;
   const ugcCoutMoyen = nbCreateurs > 0 ? (ugcCogs + ugcShipping) / nbCreateurs : 0;
 
@@ -280,7 +282,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     adsBudget: ADS_BUDGET, seuilAds,
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
     stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
-    nbCreateurs, nbPostes, nbPublies, pctPublie, nbByStatut, nbContents, ugcCoutMoyen,
+    nbCreateurs, nbByShipping, nbByContent, nbContents, ugcCoutMoyen,
     ugcComps,
     creators,
     orderBreakdowns: shopify.orderBreakdowns,
@@ -687,42 +689,45 @@ export default function Dashboard() {
             {/* KPIs */}
             <div className="g4" style={{ marginBottom: 12 }}>
               <MCard label="Créateurs" value={String(d.nbCreateurs)} sub="UGC + influence + café" />
-              <MCard label="Publiés" value={`${d.nbPublies} (${d.pctPublie}%)`} sub={`${d.nbPostes} postés ou publiés`} color={T.green} />
+              <MCard label="Colis livrés" value={String(d.nbByShipping["livre"] ?? 0)} sub="shippingStatus = livré" color={T.green} />
               <MCard label="Coût total UGC" value={eur(d.ugcCogs + d.ugcShipping)}
                 sub={`produits ${eur(d.ugcCogs)} + port ${eur(d.ugcShipping)}`} color={T.red} />
               <MCard label="Coût moyen / créateur" value={eur(d.ugcCoutMoyen)}
                 sub="produit + livraison" color={T.orange} />
             </div>
 
-            {/* Pipeline statuts */}
-            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "13px 18px", marginBottom: 14, boxShadow: T.shadow }}>
-              <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 9 }}>Pipeline créateurs</div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                {(["preparation","envoye","poste","recu","publie"] as const).map((s, idx, arr) => (
-                  <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={{ textAlign: "center" }}>
-                      <div style={{ ...statutStyle(s), borderRadius: 99, padding: "3px 11px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
-                        {d.nbByStatut[s] ?? 0}
+            {/* Pipeline double */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "13px 18px", boxShadow: T.shadow }}>
+                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 9 }}>Pipeline colis</div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  {(["preparation","envoye","livre"] as const).map((s, idx, arr) => (
+                    <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ ...shippingStyle(s), borderRadius: 99, padding: "3px 11px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
+                          {d.nbByShipping[s] ?? 0}
+                        </div>
+                        <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{SHIPPING_LABELS[s]}</div>
                       </div>
-                      <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{STATUT_LABELS[s]}</div>
+                      {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 13, marginBottom: 14 }}>→</span>}
                     </div>
-                    {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 13, marginBottom: 14 }}>→</span>}
-                  </div>
-                ))}
-                {(d.nbByStatut["en_attente"] ?? 0) > 0 && (
-                  <>
-                    <span style={{ color: T.dim, fontSize: 11, margin: "0 4px", marginBottom: 14 }}>|</span>
-                    <div style={{ textAlign: "center" }}>
-                      <div style={{ ...statutStyle("en_attente"), borderRadius: 99, padding: "3px 11px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
-                        {d.nbByStatut["en_attente"]}
+                  ))}
+                </div>
+              </div>
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "13px 18px", boxShadow: T.shadow }}>
+                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.dim, letterSpacing: "0.08em", marginBottom: 9 }}>Pipeline contenu</div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  {(["a_faire","recu","poste"] as const).map((s, idx, arr) => (
+                    <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ ...contentStyle(s), borderRadius: 99, padding: "3px 11px", fontSize: 11, fontWeight: 700, display: "inline-block" }}>
+                          {d.nbByContent[s] ?? 0}
+                        </div>
+                        <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{CONTENT_LABELS[s]}</div>
                       </div>
-                      <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{STATUT_LABELS["en_attente"]}</div>
+                      {idx < arr.length - 1 && <span style={{ color: T.dim, fontSize: 13, marginBottom: 14 }}>→</span>}
                     </div>
-                  </>
-                )}
-                <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                  <span style={{ fontSize: 20, fontWeight: 800, color: "#047857" }}>{d.pctPublie}%</span>
-                  <div style={{ fontSize: 10, color: T.dim }}>publiés</div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -748,15 +753,16 @@ export default function Dashboard() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: "#f1f5f9" }}>
-                      {["Nom", "Type", "Pays", "Produit", "Port", "COGS", "Total", "Statut"].map(h => (
+                      {["Nom", "Type", "Pays", "Produit", "Port", "COGS", "Total", "Colis", "Contenu"].map(h => (
                         <th key={h} style={{ padding: "9px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {d.creators.map((c, i) => {
-                      const { color: statutColor, background: statutBg } = statutStyle(c.statut);
-                      const typeLabel   = { ugc: "UGC", influence: "Influence", cafe: "Café", autre: "Autre" }[c.type ?? ""] ?? c.type ?? "—";
+                      const { color: shipColor, background: shipBg } = shippingStyle(c.shippingStatus);
+                      const { color: contColor, background: contBg } = contentStyle(c.contentStatus);
+                      const typeLabel = { ugc: "UGC", influence: "Influence", cafe: "Café", autre: "Autre" }[c.type ?? ""] ?? c.type ?? "—";
                       return (
                         <tr key={c.id} style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
                           <td style={{ padding: "8px 12px", fontWeight: 600, color: T.text }}>{c.nom}</td>
@@ -769,7 +775,10 @@ export default function Dashboard() {
                           <td style={{ padding: "8px 12px", color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
                           <td style={{ padding: "8px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
                           <td style={{ padding: "8px 12px" }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: statutBg, color: statutColor }}>{STATUT_LABELS[c.statut] ?? c.statut}</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: shipBg, color: shipColor }}>{SHIPPING_LABELS[c.shippingStatus] ?? c.shippingStatus}</span>
+                          </td>
+                          <td style={{ padding: "8px 12px" }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: contBg, color: contColor }}>{CONTENT_LABELS[c.contentStatus] ?? c.contentStatus}</span>
                           </td>
                         </tr>
                       );
@@ -781,7 +790,7 @@ export default function Dashboard() {
                       <td style={{ padding: "9px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcShipping)}</td>
                       <td style={{ padding: "9px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcCogs)}</td>
                       <td style={{ padding: "9px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcCogs + d.ugcShipping)}</td>
-                      <td />
+                      <td /><td />
                     </tr>
                   </tfoot>
                 </table>

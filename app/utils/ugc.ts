@@ -200,55 +200,70 @@ export const PAYS_LABELS: Record<string, string> = {
   CH: "Suisse",
 };
 
-// ─── Statuts UGC ─────────────────────────────────────────────────────────────
+// ─── Statut colis (shippingStatus) ───────────────────────────────────────────
 
-export const STATUTS = ["preparation", "envoye", "poste", "recu", "publie", "en_attente"] as const;
-export type StatutUGC = typeof STATUTS[number];
+export const SHIPPING_STATUTS = ["preparation", "envoye", "livre"] as const;
+export type ShippingStatus = typeof SHIPPING_STATUTS[number];
 
-export const STATUT_LABELS: Record<string, string> = {
-  preparation:    "En préparation",
-  envoye:         "Envoyé",
-  poste:          "Posté",
-  recu:           "Reçu",
-  publie:         "Publié",
-  en_attente:     "En attente",
-  // Legacy (accents)
-  en_preparation: "En préparation",
-  "envoyé":       "Envoyé",
-  "posté":        "Posté",
-  "reçu":         "Reçu",
-  "publié":       "Publié",
+export const SHIPPING_LABELS: Record<string, string> = {
+  preparation: "En préparation",
+  envoye:      "Envoyé",
+  livre:       "Livré",
 };
 
-export const STATUT_COLORS: Record<string, { color: string; bg: string }> = {
-  preparation:    { color: "#b45309", bg: "#fffbeb" },
-  en_preparation: { color: "#b45309", bg: "#fffbeb" },
-  envoye:         { color: "#1d4ed8", bg: "#eff6ff" },
-  "envoyé":       { color: "#1d4ed8", bg: "#eff6ff" },
-  poste:          { color: "#7c3aed", bg: "#f5f3ff" },
-  "posté":        { color: "#7c3aed", bg: "#f5f3ff" },
-  recu:           { color: "#0e7490", bg: "#ecfeff" },
-  "reçu":         { color: "#0e7490", bg: "#ecfeff" },
-  publie:         { color: "#047857", bg: "#ecfdf5" },
-  "publié":       { color: "#047857", bg: "#ecfdf5" },
-  en_attente:     { color: "#6b7280", bg: "#f9fafb" },
+export const SHIPPING_COLORS: Record<string, { color: string; bg: string }> = {
+  preparation: { color: "#b45309", bg: "#fffbeb" },
+  envoye:      { color: "#1d4ed8", bg: "#eff6ff" },
+  livre:       { color: "#059669", bg: "#f0fdf4" },
 };
 
-export function statutStyle(statut: string): { color: string; background: string } {
-  const c = STATUT_COLORS[statut] ?? { color: "#6b7280", bg: "#f9fafb" };
+export function shippingStyle(s: string): { color: string; background: string } {
+  const c = SHIPPING_COLORS[s] ?? { color: "#6b7280", bg: "#f9fafb" };
   return { color: c.color, background: c.bg };
 }
 
-export function normStatut(raw: string): string {
+export function normShippingStatus(raw: string): ShippingStatus {
   const r = (raw ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
-  if (r === "preparation" || r === "en_preparation") return "preparation";
-  if (r.includes("publi"))                           return "publie";
-  if (r.includes("post"))                            return "poste";
-  if (r.includes("recu") || r.includes("livr"))     return "recu";
-  if (r.includes("envoy"))                           return "envoye";
-  if (r.includes("attente"))                         return "en_attente";
-  if ((STATUTS as readonly string[]).includes(r))    return r;
+  if (r.includes("livr") || r === "recu") return "livre";
+  if (r.includes("envoy") || r.includes("post")) return "envoye";
   return "preparation";
+}
+
+// ─── Statut contenu (contentStatus) ──────────────────────────────────────────
+
+export const CONTENT_STATUTS = ["a_faire", "recu", "poste"] as const;
+export type ContentStatus = typeof CONTENT_STATUTS[number];
+
+export const CONTENT_LABELS: Record<string, string> = {
+  a_faire: "À faire",
+  recu:    "Reçu",
+  poste:   "Posté",
+};
+
+export const CONTENT_COLORS: Record<string, { color: string; bg: string }> = {
+  a_faire: { color: "#6b7280", bg: "#f9fafb" },
+  recu:    { color: "#7c3aed", bg: "#f5f3ff" },
+  poste:   { color: "#059669", bg: "#f0fdf4" },
+};
+
+export function contentStyle(s: string): { color: string; background: string } {
+  const c = CONTENT_COLORS[s] ?? { color: "#6b7280", bg: "#f9fafb" };
+  return { color: c.color, background: c.bg };
+}
+
+// ─── Statuts legacy (conservés pour CSV import et dashboard) ─────────────────
+
+export const STATUTS = ["preparation", "envoye", "livre"] as const;
+export type StatutUGC = typeof STATUTS[number];
+
+export const STATUT_LABELS = SHIPPING_LABELS;
+
+export function statutStyle(s: string): { color: string; background: string } {
+  return shippingStyle(s);
+}
+
+export function normStatut(raw: string): string {
+  return normShippingStatus(raw);
 }
 
 // ─── Formatage ────────────────────────────────────────────────────────────────

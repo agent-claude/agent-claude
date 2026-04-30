@@ -36,8 +36,10 @@ model Creator {
   plateforme     String?
   pays           String
   produit        String
-  statut         String   @default("preparation")
-  fraisPort      Float
+  statut          String   @default("preparation")
+  shippingStatus  String   @default("preparation")
+  contentStatus   String   @default("a_faire")
+  fraisPort       Float
   trackingNumber  String?
   codePromo       String?
   dateLivraison   String?

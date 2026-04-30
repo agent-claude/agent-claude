@@ -34,19 +34,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const existing = await prisma.todo.findUnique({ where: { id }, select: { creatorId: true } });
 
     await prisma.todo.update({ where: { id }, data: { done: !wasDone } });
-
-    // Bonus : si toutes les tâches du créateur sont faites → statut "publie"
-    if (existing?.creatorId && !wasDone) {
-      const remaining = await prisma.todo.count({
-        where: { creatorId: existing.creatorId, done: false },
-      });
-      if (remaining === 0) {
-        await prisma.creator.update({
-          where: { id: existing.creatorId },
-          data:  { statut: "publie" },
-        });
-      }
-    }
     return null;
   }
 
