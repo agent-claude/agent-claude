@@ -194,8 +194,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     safeGet(() => prisma.creator.findMany({ orderBy: { createdAt: "asc" } }), [] as Array<{
       id: string; nom: string; instagram: string; type: string | null; pays: string;
       produit: string; quantite: number; statut: string; fraisPort: number;
-      lienVideo: string | null; coutProduit: number | null; coutTotalCollab: number | null; notes: string | null;
-      codePromo: string | null; trackingNumber: string | null; dateLivraison: string | null;
+      trackingNumber: string | null; coutProduit: number | null; coutTotalCollab: number | null; notes: string | null;
+      codePromo: string | null; dateLivraison: string | null;
     }>),
     safeGet(() => prisma.produitOffert.findMany({ orderBy: { date: "desc" } }),
       [] as Array<{ produit: string; quantite: number; coutTotal: number }>),
@@ -220,7 +220,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const nbPublies    = nbByStatut["publie"] ?? 0;
   const nbPostes     = (nbByStatut["poste"] ?? 0) + nbPublies; // postés + publiés
   const pctPublie    = nbCreateurs > 0 ? Math.round((nbPublies / nbCreateurs) * 100) : 0;
-  const nbContents   = creators.filter(c => c.lienVideo).length;
+  const nbContents   = creators.filter(c => c.trackingNumber).length;
   const ugcCoutMoyen = nbCreateurs > 0 ? (ugcCogs + ugcShipping) / nbCreateurs : 0;
 
   // ── Produits offerts hors Creator (événements, cafés non-Creator, etc.) ──────

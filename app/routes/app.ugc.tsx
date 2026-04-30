@@ -108,12 +108,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "update_statut") {
+    const trackingNumber = (form.get("trackingNumber") as string) || null;
+    const rawStatut      = form.get("statut") as string;
+    // Auto-avancer à "envoye" si un numéro de suivi est saisi et qu'on est en preparation
+    const statut = (trackingNumber && rawStatut === "preparation") ? "envoye" : rawStatut;
     await prisma.creator.update({
       where: { id: form.get("id") as string },
-      data: {
-        statut:    form.get("statut") as string,
-        lienVideo: (form.get("lienVideo") as string) || null,
-      },
+      data: { statut, trackingNumber },
     });
     return null;
   }
@@ -140,7 +141,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         trackingNumber: (form.get("trackingNumber") as string) || null,
         codePromo:      (form.get("codePromo") as string) || null,
         dateLivraison:  (form.get("dateLivraison") as string) || null,
-        lienVideo:      (form.get("lienVideo") as string) || null,
         notes:          (form.get("notes") as string) || null,
         coutProduit:    cp,
         coutTotalCollab: cp + port,
@@ -177,8 +177,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           trackingNumber: row.trackingNumber || null,
           codePromo:      row.codePromo || null,
           dateLivraison:  row.dateLivraison || null,
-          lienVideo:      null,
-          coutProduit:    cp,
+            coutProduit:    cp,
           coutTotalCollab: cp + port,
         },
       });
@@ -213,7 +212,7 @@ const cell: React.CSSProperties = { padding: "8px 12px", color: "#0f172a" };
 
 function CreatorRow({ c, i }: {
   c: { id: string; nom: string; instagram: string; type: string | null; pays: string; produit: string;
-       statut: string; fraisPort: number; lienVideo: string | null; coutProduit: number | null;
+       statut: string; fraisPort: number; trackingNumber: string | null; coutProduit: number | null;
        coutTotalCollab: number | null; notes: string | null; };
   i: number;
 }) {
@@ -242,8 +241,8 @@ function CreatorRow({ c, i }: {
       <td style={{ ...cell, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(c.fraisPort)}</td>
       <td style={{ ...cell, color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
       <td style={{ ...cell, color: T.red, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
-      {/* Statut + lienVideo inline */}
-      <td style={{ ...cell, minWidth: 280 }}>
+      {/* Statut + tracking inline */}
+      <td style={{ ...cell, minWidth: 300 }}>
         <fetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
           <input type="hidden" name="intent" value="update_statut" />
           <input type="hidden" name="id" value={c.id} />
@@ -253,18 +252,16 @@ function CreatorRow({ c, i }: {
               <option key={s} value={s}>{STATUT_LABELS[s]}</option>
             ))}
           </select>
-          <input name="lienVideo" defaultValue={c.lienVideo ?? ""} placeholder="URL vidéo..."
-            style={{ ...inp, width: 150, fontSize: 12, padding: "3px 7px" }} />
+          <input name="trackingNumber" defaultValue={c.trackingNumber ?? ""} placeholder="N° suivi…"
+            style={{ ...inp, width: 140, fontSize: 12, padding: "3px 7px" }} />
           <button type="submit"
             style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
             ✓
           </button>
         </fetcher.Form>
       </td>
-      <td style={cell}>
-        {c.lienVideo
-          ? <a href={c.lienVideo} target="_blank" rel="noreferrer" style={{ color: T.accent, fontSize: 12 }}>Voir →</a>
-          : <span style={{ color: T.dim }}>—</span>}
+      <td style={{ ...cell, fontSize: 11, color: c.trackingNumber ? T.text : T.dim, fontVariantNumeric: "tabular-nums" }}>
+        {c.trackingNumber ?? "—"}
       </td>
       <td style={{ ...cell, color: T.muted, fontSize: 11, maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {c.notes ?? "—"}
@@ -502,8 +499,8 @@ export default function UGCPage() {
               </label>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-              <label style={lbl}><span style={lbT}>Lien vidéo</span>
-                <input name="lienVideo" type="url" placeholder="https://..." style={inp} />
+              <label style={lbl}><span style={lbT}>N° suivi (Colissimo, Mondial Relay…)</span>
+                <input name="trackingNumber" placeholder="ex: 1A00123456789" style={inp} />
               </label>
               <label style={lbl}><span style={lbT}>Notes</span>
                 <input name="notes" placeholder="ex: 2 vidéos, contrat à faire..." style={inp} />
@@ -526,7 +523,7 @@ export default function UGCPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / Lien vidéo", "Vidéo", "Notes", ""].map(h => (
+                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / N° suivi", "Tracking", "Notes", ""].map(h => (
                       <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                     ))}
                   </tr>

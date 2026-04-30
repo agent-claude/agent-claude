@@ -38,7 +38,6 @@ model Creator {
   produit        String
   statut         String   @default("preparation")
   fraisPort      Float
-  lienVideo      String?
   trackingNumber  String?
   codePromo       String?
   dateLivraison   String?
