@@ -184,10 +184,11 @@ export const PRODUIT_LABELS: Record<string, string> = {
 };
 
 export const TYPE_LABELS: Record<string, string> = {
-  ugc:       "UGC",
-  influence: "Influence",
-  cafe:      "Café / Demo",
-  autre:     "Autre",
+  ugc:        "UGC",
+  influence:  "Influence",
+  cafe:       "Café / Demo",
+  cafe_test:  "Café / Test",
+  autre:      "Autre",
 };
 
 export const PAYS_LABELS: Record<string, string> = {
