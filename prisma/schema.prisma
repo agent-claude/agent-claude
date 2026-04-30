@@ -42,6 +42,7 @@ model Creator {
   trackingNumber  String?
   codePromo       String?
   dateLivraison   String?
+  quantite        Int      @default(1)
   coutProduit     Float?
   coutTotalCollab Float?
   createdAt       DateTime @default(now())

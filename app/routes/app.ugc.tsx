@@ -1,416 +1,514 @@
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import {
+  parseUgcProduit, compsToKey, keyToComps, coutComps, coutFromKey,
+  ugcShippingFromKey, ugcShippingFromText,
+  PRODUIT_LABELS, TYPE_LABELS, PAYS_LABELS,
+  eur, fmtComps,
+} from "../utils/ugc";
 
-type Pays = "France" | "Belgique" | "Allemagne" | "Suisse";
-type Produit = "1 pot" | "2 pots" | "3 pots" | "Kit Découverte" | "Kit Ultime";
-type Statut = "envoyé" | "reçu" | "posté";
+// ─── CSV parsing ──────────────────────────────────────────────────────────────
 
-const PAYS: Pays[] = ["France", "Belgique", "Allemagne", "Suisse"];
-const PRODUITS: Produit[] = ["1 pot", "2 pots", "3 pots", "Kit Découverte", "Kit Ultime"];
-const STATUTS: Statut[] = ["envoyé", "reçu", "posté"];
-
-// Colonnes CSV → champs Creator
 const CSV_MAP: Record<string, string> = {
   "Nom Prénom":              "nom",
-  "E-mail ou insta":         "contact",
+  "E-mail ou insta":         "instagram",
   "UGC / Influence":         "type",
   "Plateforme":              "plateforme",
-  "Statut":                  "statut",
+  "Statut":                  "statutRaw",
   "numéro du colis":         "trackingNumber",
-  "kit ou produits envoyés": "produit",
+  "kit ou produits envoyés": "produitRaw",
   "code promo":              "codePromo",
-  "Pays":                    "pays",
-  "Coût de livraison":       "fraisPort",
+  "Pays":                    "paysRaw",
+  "Coût de livraison":       "fraisPortRaw",
   "Livré":                   "dateLivraison",
 };
 
 type CsvRow = Record<string, string>;
 
 function parseCsv(text: string): CsvRow[] {
-  const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
-
-  // Auto-détection séparateur (comma vs semicolon)
   const sep = lines[0].split(";").length > lines[0].split(",").length ? ";" : ",";
 
   function splitRow(line: string): string[] {
     const cells: string[] = [];
-    let cur = "";
-    let inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') { inQ = !inQ; }
+    let cur = "", inQ = false;
+    for (const ch of line) {
+      if (ch === '"')          { inQ = !inQ; }
       else if (ch === sep && !inQ) { cells.push(cur.trim()); cur = ""; }
-      else { cur += ch; }
+      else                     { cur += ch; }
     }
     cells.push(cur.trim());
     return cells;
   }
 
-  const rawHeaders = splitRow(lines[0]);
-  const headers = rawHeaders.map((h) => h.replace(/^"|"$/g, "").trim());
-
-  return lines.slice(1).map((line) => {
+  const headers = splitRow(lines[0]).map(h => h.replace(/^"|"$/g, "").trim());
+  return lines.slice(1).map(line => {
     const vals = splitRow(line);
-    const obj: CsvRow = {};
+    const row: CsvRow = {};
     headers.forEach((h, i) => {
       const field = CSV_MAP[h];
-      if (field) obj[field] = (vals[i] ?? "").replace(/^"|"$/g, "").trim();
+      if (field) row[field] = (vals[i] ?? "").replace(/^"|"$/g, "").trim();
     });
-    return obj;
-  }).filter((row) => row.nom && row.nom.trim());
+    return row;
+  }).filter(r => r.nom?.trim());
 }
 
-function getShippingCost(pays: string, produit: string): number {
-  if (pays === "France") {
-    if (produit === "3 pots") return 7.59;
-    if (produit === "Kit Ultime") return 9.29;
-    return 5.49;
-  }
-  if (pays === "Belgique") {
-    if (produit === "Kit Ultime") return 6.60;
-    return 4.60;
-  }
-  if (pays === "Allemagne") {
-    if (produit === "Kit Ultime") return 13.80;
-    return 12.50;
-  }
-  if (produit === "Kit Ultime") return 19.39;
-  return 14.99;
+function normPays(raw: string): string {
+  const t = raw.toLowerCase().split(",")[0].trim(); // "france, bordeaux" → "france"
+  if (t.includes("france")) return "FR";
+  if (t.includes("belg"))   return "BE";
+  if (t.includes("ital"))   return "IT";
+  if (t.includes("portug")) return "PT";
+  if (t.includes("allem") || t.includes("germany")) return "DE";
+  if (t.includes("suisse") || t.includes("swiss"))  return "CH";
+  return raw.toUpperCase().slice(0, 2); // fallback : 2 premières lettres
 }
+
+function normStatut(raw: string): string {
+  const t = raw.toLowerCase();
+  if (t.includes("fini") || t.includes("post"))   return "posté";
+  if (t.includes("recu") || t.includes("reçu") || t.includes("livr")) return "reçu";
+  return "envoyé";
+}
+
+// ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const creators = await prisma.creator.findMany({ orderBy: { createdAt: "desc" } });
-  return { creators };
+  const totaux = creators.reduce(
+    (acc, c) => ({
+      cogs:    acc.cogs    + (c.coutProduit     ?? 0),
+      port:    acc.port    + c.fraisPort,
+      total:   acc.total   + (c.coutTotalCollab ?? 0),
+      postés:  acc.postés  + (c.statut === "posté"  ? 1 : 0),
+      envoyés: acc.envoyés + (c.statut === "envoyé" ? 1 : 0),
+      reçus:   acc.reçus   + (c.statut === "reçu"   ? 1 : 0),
+    }),
+    { cogs: 0, port: 0, total: 0, postés: 0, envoyés: 0, reçus: 0 },
+  );
+  return { creators, totaux };
 };
+
+// ─── Action ───────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   await authenticate.admin(request);
-  const data = await request.formData();
-  const intent = String(data.get("intent"));
-
-  if (intent === "create") {
-    const pays = String(data.get("pays"));
-    const produit = String(data.get("produit"));
-    const lienVideoRaw = String(data.get("lienVideo") ?? "").trim();
-    await prisma.creator.create({
-      data: {
-        nom: String(data.get("nom")),
-        instagram: String(data.get("instagram")),
-        tiktok: String(data.get("tiktok")),
-        pays,
-        produit,
-        statut: String(data.get("statut")),
-        fraisPort: getShippingCost(pays, produit),
-        lienVideo: lienVideoRaw || null,
-      },
-    });
-  }
+  const form   = await request.formData();
+  const intent = form.get("intent") as string;
 
   if (intent === "delete") {
-    await prisma.creator.delete({ where: { id: String(data.get("id")) } });
+    await prisma.creator.delete({ where: { id: form.get("id") as string } });
+    return null;
   }
 
-  if (intent === "updateStatut") {
+  if (intent === "update_statut") {
     await prisma.creator.update({
-      where: { id: String(data.get("id")) },
-      data: { statut: String(data.get("statut")) },
+      where: { id: form.get("id") as string },
+      data: {
+        statut:    form.get("statut") as string,
+        lienVideo: (form.get("lienVideo") as string) || null,
+      },
     });
+    return null;
   }
 
-  if (intent === "importCsv") {
+  if (intent === "create") {
+    const produit  = form.get("produit") as string;
+    const pays     = form.get("pays") as string;
+    const quantite = parseInt(form.get("quantite") as string, 10) || 1;
+    const cp       = coutFromKey(produit, quantite);
+    const port     = parseFloat(form.get("fraisPort") as string) || ugcShippingFromKey(pays, produit, quantite);
+
+    await prisma.creator.create({
+      data: {
+        nom:            (form.get("nom") as string).trim(),
+        instagram:      (form.get("instagram") as string).trim(),
+        tiktok:         (form.get("tiktok") as string) || "",
+        type:           form.get("type") as string,
+        plateforme:     "Réseaux sociaux",
+        pays,
+        produit,
+        quantite,
+        statut:         (form.get("statut") as string) || "envoyé",
+        fraisPort:      port,
+        trackingNumber: (form.get("trackingNumber") as string) || null,
+        codePromo:      (form.get("codePromo") as string) || null,
+        dateLivraison:  (form.get("dateLivraison") as string) || null,
+        lienVideo:      (form.get("lienVideo") as string) || null,
+        coutProduit:    cp,
+        coutTotalCollab: cp + port,
+      },
+    });
+    return null;
+  }
+
+  if (intent === "import_csv") {
+    const rows: CsvRow[] = JSON.parse(form.get("rows") as string);
     let imported = 0;
-    let skipped = 0;
-    const rows: CsvRow[] = JSON.parse(String(data.get("rows") ?? "[]"));
 
     for (const row of rows) {
-      if (!row.nom) continue;
-      const existing = await prisma.creator.findFirst({
-        where: { nom: row.nom, contact: row.contact || null },
-      });
-      if (existing) { skipped++; continue; }
-
-      // Frais de port : CSV si présent, sinon calcul
-      const csvFrais = parseFloat(String(row.fraisPort ?? "").replace(",", "."));
-      const fraisPort = !isNaN(csvFrais) && csvFrais > 0
-        ? csvFrais
-        : getShippingCost(row.pays ?? "", row.produit ?? "");
+      const pays     = normPays(row.paysRaw ?? "");
+      const comps    = parseUgcProduit(row.produitRaw ?? "");
+      const produit  = compsToKey(comps);
+      const cp       = coutComps(comps);
+      const csvPort  = parseFloat((row.fraisPortRaw ?? "").replace(",", "."));
+      const port     = !isNaN(csvPort) && csvPort > 0 ? csvPort : ugcShippingFromText(pays, row.produitRaw ?? "");
+      const statut   = normStatut(row.statutRaw ?? "");
 
       await prisma.creator.create({
         data: {
-          nom: row.nom,
-          instagram: row.contact || "",
-          tiktok: "",
-          contact: row.contact || null,
-          type: row.type || null,
-          plateforme: row.plateforme || null,
-          pays: row.pays || "",
-          produit: row.produit || "",
-          statut: row.statut || "envoyé",
-          fraisPort,
+          nom:            row.nom.trim(),
+          instagram:      row.instagram || "",
+          tiktok:         "",
+          type:           row.type?.toLowerCase().trim() || null,
+          plateforme:     row.plateforme || null,
+          pays,
+          produit,
+          quantite:       1,
+          statut,
+          fraisPort:      port,
           trackingNumber: row.trackingNumber || null,
-          codePromo: row.codePromo || null,
-          dateLivraison: row.dateLivraison || null,
+          codePromo:      row.codePromo || null,
+          dateLivraison:  row.dateLivraison || null,
+          lienVideo:      null,
+          coutProduit:    cp,
+          coutTotalCollab: cp + port,
         },
       });
       imported++;
     }
-    return { importResult: `${imported} importé(s), ${skipped} déjà présent(s).` };
+    return { importResult: `${imported} créateur(s) importé(s)` };
   }
 
   return null;
 };
 
-type CreatorRow = {
-  id: string;
-  nom: string;
-  instagram: string;
-  tiktok: string;
-  contact: string | null;
-  type: string | null;
-  plateforme: string | null;
-  pays: string;
-  produit: string;
-  statut: string;
-  fraisPort: number;
-  lienVideo: string | null;
-  trackingNumber: string | null;
-  codePromo: string | null;
-  dateLivraison: string | null;
+// ─── Design tokens ────────────────────────────────────────────────────────────
+
+const T = {
+  bg: "#f8fafc", card: "#ffffff", border: "#e2e8f0",
+  text: "#0f172a", muted: "#64748b", dim: "#94a3b8", accent: "#6366f1",
+  green: "#059669", greenBg: "#f0fdf4",
+  orange: "#d97706", orangeBg: "#fffbeb",
+  red: "#dc2626", redBg: "#fef2f2", redBdr: "#fca5a5",
+  shadow: "0 1px 3px rgba(0,0,0,0.07)",
 };
 
-function Row({ creator }: { creator: CreatorRow }) {
-  const fetcher = useFetcher();
-  const currentStatut = String(fetcher.formData?.get("statut") ?? creator.statut);
-  const display = creator.contact || creator.instagram || "—";
+const inp: React.CSSProperties = {
+  border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px",
+  fontSize: 13, width: "100%", boxSizing: "border-box", background: "#fff",
+};
+const lbl: React.CSSProperties  = { display: "flex", flexDirection: "column", gap: 5 };
+const lbT: React.CSSProperties  = { fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" };
+const cell: React.CSSProperties = { padding: "8px 12px", color: "#0f172a" };
+
+// ─── Composant Row éditable ───────────────────────────────────────────────────
+
+function CreatorRow({ c, i }: {
+  c: { id: string; nom: string; instagram: string; type: string | null; pays: string; produit: string;
+       statut: string; fraisPort: number; lienVideo: string | null; coutProduit: number | null;
+       coutTotalCollab: number | null; };
+  i: number;
+}) {
+  const fetcher    = useFetcher();
+  const statut     = String(fetcher.formData?.get("statut") ?? c.statut);
+  const statutColor = statut === "posté" ? T.green : statut === "reçu" ? T.orange : T.muted;
+  const statutBg    = statut === "posté" ? T.greenBg : statut === "reçu" ? T.orangeBg : "#f1f5f9";
+  const typeLabel   = TYPE_LABELS[c.type ?? ""] ?? c.type ?? "—";
+  const comps       = keyToComps(c.produit, 1);
 
   return (
-    <tr>
-      <td style={td}>{creator.nom}</td>
-      <td style={td}>{display}</td>
-      <td style={td}>{creator.type || "—"}</td>
-      <td style={td}>{creator.plateforme || "—"}</td>
-      <td style={td}>{creator.pays}</td>
-      <td style={td}>{creator.produit}</td>
-      <td style={td}>
-        <select
-          value={currentStatut}
-          onChange={(e) =>
-            fetcher.submit(
-              { intent: "updateStatut", id: creator.id, statut: e.target.value },
-              { method: "post" }
-            )
-          }
-          style={{ fontSize: 13, padding: "2px 4px" }}
-        >
-          {STATUTS.map((s) => <option key={s}>{s}</option>)}
-        </select>
+    <tr style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+      <td style={{ ...cell, fontWeight: 600 }}>
+        <div>{c.nom}</div>
+        {c.instagram && <div style={{ fontSize: 11, color: T.muted }}>{c.instagram}</div>}
       </td>
-      <td style={td}>{creator.fraisPort.toFixed(2)} €</td>
-      <td style={td}>{creator.trackingNumber || "—"}</td>
-      <td style={td}>
-        {creator.lienVideo ? (
-          <a href={creator.lienVideo} target="_blank" rel="noreferrer" style={{ color: "#0070f3" }}>Voir</a>
-        ) : "—"}
+      <td style={cell}>
+        <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 99, background: "#eef2ff", color: T.accent }}>
+          {typeLabel}
+        </span>
       </td>
-      <td style={td}>
-        <button
-          type="button"
-          onClick={() => fetcher.submit({ intent: "delete", id: creator.id }, { method: "post" })}
-          style={{ fontSize: 13, cursor: "pointer", color: "#c00", background: "none", border: "1px solid #c00", borderRadius: 4, padding: "2px 8px" }}
-        >
-          Supprimer
-        </button>
+      <td style={{ ...cell, color: T.muted }}>{PAYS_LABELS[c.pays] ?? c.pays}</td>
+      <td style={cell}>
+        <div style={{ fontSize: 12 }}>{PRODUIT_LABELS[c.produit] ?? c.produit}</div>
+        <div style={{ fontSize: 11, color: T.muted }}>{fmtComps(comps)}</div>
+      </td>
+      <td style={{ ...cell, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(c.fraisPort)}</td>
+      <td style={{ ...cell, color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
+      <td style={{ ...cell, color: T.red, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
+      {/* Statut + lienVideo inline */}
+      <td style={{ ...cell, minWidth: 280 }}>
+        <fetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
+          <input type="hidden" name="intent" value="update_statut" />
+          <input type="hidden" name="id" value={c.id} />
+          <select name="statut" defaultValue={c.statut}
+            style={{ ...inp, width: "auto", fontSize: 12, padding: "3px 7px", background: statutBg, color: statutColor, fontWeight: 700 }}>
+            <option value="envoyé">Envoyé</option>
+            <option value="reçu">Reçu</option>
+            <option value="posté">Posté</option>
+          </select>
+          <input name="lienVideo" defaultValue={c.lienVideo ?? ""} placeholder="URL vidéo..."
+            style={{ ...inp, width: 150, fontSize: 12, padding: "3px 7px" }} />
+          <button type="submit"
+            style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
+            ✓
+          </button>
+        </fetcher.Form>
+      </td>
+      <td style={cell}>
+        {c.lienVideo
+          ? <a href={c.lienVideo} target="_blank" rel="noreferrer" style={{ color: T.accent, fontSize: 12 }}>Voir →</a>
+          : <span style={{ color: T.dim }}>—</span>}
+      </td>
+      <td style={cell}>
+        <fetcher.Form method="post">
+          <input type="hidden" name="intent" value="delete" />
+          <input type="hidden" name="id" value={c.id} />
+          <button type="submit" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13, padding: "2px 6px" }}>✕</button>
+        </fetcher.Form>
       </td>
     </tr>
   );
 }
 
-export default function UGC() {
-  const { creators } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher();
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function UGCPage() {
+  const { creators, totaux } = useLoaderData<typeof loader>();
+  const nav        = useNavigation();
   const csvFetcher = useFetcher<{ importResult: string }>();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const fileRef    = useRef<HTMLInputElement>(null);
   const [csvPreview, setCsvPreview] = useState<CsvRow[] | null>(null);
-
-  const [nom, setNom] = useState("");
-  const [instagram, setInstagram] = useState("");
-  const [tiktok, setTiktok] = useState("");
-  const [pays, setPays] = useState<Pays>("France");
-  const [produit, setProduit] = useState<Produit>("1 pot");
-  const [statut, setStatut] = useState<Statut>("envoyé");
-  const [lienVideo, setLienVideo] = useState("");
-
-  function addCreator() {
-    if (!nom) return;
-    fetcher.submit(
-      { intent: "create", nom, instagram, tiktok, pays, produit, statut, lienVideo },
-      { method: "post" }
-    );
-    setNom(""); setInstagram(""); setTiktok("");
-    setPays("France"); setProduit("1 pot"); setStatut("envoyé"); setLienVideo("");
-  }
+  const submitting = nav.state === "submitting";
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      const rows = parseCsv(text);
+    reader.onload = ev => {
+      const rows = parseCsv(ev.target?.result as string);
       setCsvPreview(rows);
     };
     reader.readAsText(file, "UTF-8");
   }
 
-  function confirmCsvImport() {
+  function confirmImport() {
     if (!csvPreview) return;
-    csvFetcher.submit(
-      { intent: "importCsv", rows: JSON.stringify(csvPreview) },
-      { method: "post" }
-    );
+    csvFetcher.submit({ intent: "import_csv", rows: JSON.stringify(csvPreview) }, { method: "post" });
     setCsvPreview(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
-  // Optimistic UI : affiche la nouvelle ligne immédiatement pendant la sauvegarde
-  const isCreating =
-    fetcher.state !== "idle" && fetcher.formData?.get("intent") === "create";
-  const optimistic: CreatorRow | null = isCreating
-    ? {
-        id: "__optimistic__",
-        nom:       String(fetcher.formData!.get("nom") ?? ""),
-        instagram: String(fetcher.formData!.get("instagram") ?? ""),
-        tiktok:    String(fetcher.formData!.get("tiktok") ?? ""),
-        contact:   null, type: null, plateforme: null,
-        pays:    String(fetcher.formData!.get("pays") ?? ""),
-        produit: String(fetcher.formData!.get("produit") ?? ""),
-        statut:  String(fetcher.formData!.get("statut") ?? "envoyé"),
-        fraisPort: getShippingCost(
-          String(fetcher.formData!.get("pays") ?? ""),
-          String(fetcher.formData!.get("produit") ?? ""),
-        ),
-        lienVideo: String(fetcher.formData!.get("lienVideo") ?? "") || null,
-        trackingNumber: null, codePromo: null, dateLivraison: null,
-      }
-    : null;
-
-  const displayed = optimistic ? [optimistic, ...creators] : creators;
-  const totalShipping = displayed.reduce((sum, c) => sum + c.fraisPort, 0);
-  const inputStyle = { padding: 8, fontSize: 14, width: "100%" };
-
   return (
-    <div style={{ padding: 40 }}>
-      {/* En-tête */}
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>UGC</h1>
+    <div style={{ minHeight: "100vh", background: T.bg, padding: "32px 24px 60px",
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
 
-        {/* Import CSV */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
-          padding: "7px 14px", fontSize: 14, background: "#f1f1f1", border: "1px solid #ccc", borderRadius: 4 }}>
-          📂 Importer CSV
-          <input ref={fileRef} type="file" accept=".csv" onChange={handleFileChange} style={{ display: "none" }} />
-        </label>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: T.text }}>UGC & Collabs</h1>
+            <p style={{ margin: "3px 0 0", fontSize: 12, color: T.muted }}>Créateurs · Influenceurs · Cafés · Partenariats</p>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <label style={{ fontSize: 11, color: T.muted, background: "#f1f5f9", border: `1px solid ${T.border}`,
+              padding: "4px 12px", borderRadius: 8, cursor: "pointer" }}>
+              Importer CSV
+              <input ref={fileRef} type="file" accept=".csv" onChange={handleFileChange} style={{ display: "none" }} />
+            </label>
+            <a href="/app" style={{ fontSize: 12, color: T.accent, textDecoration: "none", border: "1px solid #c7d2fe", padding: "4px 12px", borderRadius: 8 }}>
+              ← Dashboard
+            </a>
+          </div>
+        </div>
 
+        {/* Résultat import */}
         {csvFetcher.data?.importResult && (
-          <span style={{ fontSize: 13, color: "#108043" }}>{csvFetcher.data.importResult}</span>
+          <div style={{ background: T.greenBg, border: "1px solid #86efac", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 13, color: T.green, fontWeight: 600 }}>
+            ✓ {csvFetcher.data.importResult}
+          </div>
         )}
-      </div>
 
-      {/* Prévisualisation CSV */}
-      {csvPreview && (
-        <div style={{ marginBottom: 24, padding: 16, background: "#f9fafb", border: "1px solid #e4e5e7", borderRadius: 6 }}>
-          <p style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 600 }}>
-            {csvPreview.length} ligne(s) détectée(s) — vérifiez avant d'importer :
-          </p>
-          <div style={{ overflowX: "auto", maxHeight: 200, overflowY: "auto" }}>
-            <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr>{["Nom", "Contact", "Pays", "Produit", "Statut", "Frais"].map((h) =>
-                  <th key={h} style={{ ...th, fontSize: 12 }}>{h}</th>)}</tr>
-              </thead>
-              <tbody>
-                {csvPreview.map((r, i) => (
-                  <tr key={i}>
-                    <td style={td}>{r.nom}</td>
-                    <td style={td}>{r.contact || "—"}</td>
-                    <td style={td}>{r.pays || "—"}</td>
-                    <td style={td}>{r.produit || "—"}</td>
-                    <td style={td}>{r.statut || "—"}</td>
-                    <td style={td}>{r.fraisPort || "—"}</td>
+        {/* Prévisualisation CSV */}
+        {csvPreview && (
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 20, marginBottom: 24, boxShadow: T.shadow }}>
+            <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", color: T.muted, marginBottom: 12 }}>
+              {csvPreview.length} ligne(s) détectée(s) — aperçu parsing
+            </div>
+            <div style={{ overflowX: "auto", maxHeight: 200, marginBottom: 14 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#f1f5f9" }}>
+                    {["Nom", "Pays", "Produit brut", "→ Clé", "Composants", "Port calculé", "Statut"].map(h => (
+                      <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {csvPreview.map((r, i) => {
+                    const pays   = normPays(r.paysRaw ?? "");
+                    const comps  = parseUgcProduit(r.produitRaw ?? "");
+                    const key    = compsToKey(comps);
+                    const port   = ugcShippingFromText(pays, r.produitRaw ?? "");
+                    return (
+                      <tr key={i} style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                        <td style={{ padding: "6px 10px" }}>{r.nom}</td>
+                        <td style={{ padding: "6px 10px", color: T.muted }}>{pays}</td>
+                        <td style={{ padding: "6px 10px", color: T.muted, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.produitRaw}</td>
+                        <td style={{ padding: "6px 10px" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#eef2ff", color: T.accent }}>{key}</span>
+                        </td>
+                        <td style={{ padding: "6px 10px", fontSize: 11, color: T.green }}>{fmtComps(comps)}</td>
+                        <td style={{ padding: "6px 10px", fontVariantNumeric: "tabular-nums" }}>{eur(port)}</td>
+                        <td style={{ padding: "6px 10px", color: T.muted }}>{normStatut(r.statutRaw ?? "")}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={confirmImport}
+                disabled={csvFetcher.state === "submitting"}
+                style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 9, padding: "9px 18px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>
+                {csvFetcher.state === "submitting" ? "Import…" : "Confirmer l'import"}
+              </button>
+              <button type="button" onClick={() => { setCsvPreview(null); if (fileRef.current) fileRef.current.value = ""; }}
+                style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 9, padding: "9px 18px", fontSize: 13, cursor: "pointer" }}>
+                Annuler
+              </button>
+            </div>
           </div>
-          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-            <button type="button" onClick={confirmCsvImport}
-              disabled={csvFetcher.state === "submitting"}
-              style={{ padding: "7px 16px", fontSize: 13, cursor: "pointer", background: "#008060", color: "#fff", border: "none", borderRadius: 4 }}>
-              {csvFetcher.state === "submitting" ? "Import…" : "Confirmer l'import"}
-            </button>
-            <button type="button" onClick={() => { setCsvPreview(null); if (fileRef.current) fileRef.current.value = ""; }}
-              style={{ padding: "7px 16px", fontSize: 13, cursor: "pointer", background: "none", border: "1px solid #ccc", borderRadius: 4 }}>
-              Annuler
-            </button>
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* Formulaire manuel */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 320 }}>
-        <input placeholder="Nom *" value={nom} onChange={(e) => setNom(e.target.value)} style={inputStyle} />
-        <input placeholder="Instagram" value={instagram} onChange={(e) => setInstagram(e.target.value)} style={inputStyle} />
-        <input placeholder="TikTok" value={tiktok} onChange={(e) => setTiktok(e.target.value)} style={inputStyle} />
-        <select value={pays} onChange={(e) => setPays(e.target.value as Pays)} style={inputStyle}>
-          {PAYS.map((p) => <option key={p}>{p}</option>)}
-        </select>
-        <select value={produit} onChange={(e) => setProduit(e.target.value as Produit)} style={inputStyle}>
-          {PRODUITS.map((p) => <option key={p}>{p}</option>)}
-        </select>
-        <select value={statut} onChange={(e) => setStatut(e.target.value as Statut)} style={inputStyle}>
-          {STATUTS.map((s) => <option key={s}>{s}</option>)}
-        </select>
-        <input placeholder="Lien vidéo" value={lienVideo} onChange={(e) => setLienVideo(e.target.value)} style={inputStyle} />
-        <div style={{ fontSize: 13, color: "#555" }}>
-          Frais de port : {getShippingCost(pays, produit).toFixed(2)} €
+        {/* Totaux */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px 18px", boxShadow: T.shadow }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Total créateurs</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: T.text }}>{creators.length}</div>
+            <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
+              {totaux.postés} postés · {totaux.reçus} reçus · {totaux.envoyés} envoyés
+            </div>
+          </div>
+          <div style={{ background: T.redBg, border: `1px solid ${T.redBdr}`, borderRadius: 14, padding: "16px 18px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>COGS produits</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.cogs)}</div>
+          </div>
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px 18px", boxShadow: T.shadow }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Livraison</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.port)}</div>
+          </div>
+          <div style={{ background: T.redBg, border: `1px solid ${T.redBdr}`, borderRadius: 14, padding: "16px 18px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Total UGC</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.total)}</div>
+          </div>
         </div>
-        <button type="button" onClick={addCreator} style={{ padding: "8px 16px", fontSize: 14, cursor: "pointer" }}>
-          Ajouter
-        </button>
+
+        {/* Formulaire ajout */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, padding: 24, marginBottom: 28, boxShadow: T.shadow }}>
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: T.muted, marginBottom: 16 }}>
+            Ajouter un créateur
+          </div>
+          <form method="post" action="/app/ugc">
+            <input type="hidden" name="intent" value="create" />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 12 }}>
+              <label style={lbl}><span style={lbT}>Nom *</span>
+                <input name="nom" required placeholder="Nom Prénom / Marque" style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>Instagram / Email</span>
+                <input name="instagram" placeholder="@handle ou email" style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>TikTok</span>
+                <input name="tiktok" placeholder="@handle" style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>Type</span>
+                <select name="type" required style={inp}>
+                  {Object.entries(TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+              <label style={lbl}><span style={lbT}>Pays</span>
+                <select name="pays" required style={inp}>
+                  {Object.entries(PAYS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+              <label style={lbl}><span style={lbT}>Produit</span>
+                <select name="produit" required style={inp}>
+                  {Object.entries(PRODUIT_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+              <label style={lbl}><span style={lbT}>Qté</span>
+                <input name="quantite" type="number" min="1" defaultValue="1" style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>Statut</span>
+                <select name="statut" style={inp}>
+                  <option value="envoyé">Envoyé</option>
+                  <option value="reçu">Reçu</option>
+                  <option value="posté">Posté</option>
+                </select>
+              </label>
+              <label style={lbl}><span style={lbT}>Frais port (auto si vide)</span>
+                <input name="fraisPort" type="number" step="0.01" placeholder="calculé auto" style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>N° suivi</span>
+                <input name="trackingNumber" placeholder="LP: 5Y00..." style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>Code promo</span>
+                <input name="codePromo" placeholder="ex: ANAIS10" style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>Date livraison</span>
+                <input name="dateLivraison" type="date" style={inp} />
+              </label>
+            </div>
+            <label style={{ ...lbl, marginBottom: 14 }}><span style={lbT}>Lien vidéo</span>
+              <input name="lienVideo" type="url" placeholder="https://..." style={inp} />
+            </label>
+            <button type="submit" disabled={submitting} style={{
+              background: T.accent, color: "#fff", border: "none", borderRadius: 10,
+              padding: "10px 20px", fontWeight: 600, fontSize: 13, cursor: "pointer",
+              opacity: submitting ? 0.6 : 1,
+            }}>
+              {submitting ? "Enregistrement..." : "Ajouter"}
+            </button>
+          </form>
+        </div>
+
+        {/* Table créateurs */}
+        {creators.length > 0 && (
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", boxShadow: T.shadow }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#f1f5f9" }}>
+                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / Lien vidéo", "Vidéo", ""].map(h => (
+                      <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {creators.map((c, i) => <CreatorRow key={c.id} c={c} i={i} />)}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: "#f1f5f9", borderTop: `2px solid ${T.border}` }}>
+                    <td colSpan={4} style={{ padding: "10px 12px", fontWeight: 700, color: T.text }}>Total</td>
+                    <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.port)}</td>
+                    <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.cogs)}</td>
+                    <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.total)}</td>
+                    <td colSpan={3} />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )}
+
       </div>
-
-      {/* Tableau */}
-      {creators.length > 0 && (
-        <div style={{ marginTop: 32 }}>
-          <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>
-            Total frais de port : {totalShipping.toFixed(2)} €
-          </p>
-          <h2 style={{ fontSize: 16, marginBottom: 8 }}>Liste des créateurs :</h2>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", fontSize: 14 }}>
-              <thead>
-                <tr>
-                  {["Nom", "Contact", "Type", "Plateforme", "Pays", "Produit", "Statut",
-                    "Frais de port", "Tracking", "Lien vidéo", "Action"].map((h) => (
-                    <th key={h} style={th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {creators.map((c) => <Row key={c.id} creator={c} />)}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-const td: React.CSSProperties = { padding: "6px 12px", whiteSpace: "nowrap" };
-const th: React.CSSProperties = { textAlign: "left", padding: "6px 12px", borderBottom: "2px solid #ccc", whiteSpace: "nowrap" };
+

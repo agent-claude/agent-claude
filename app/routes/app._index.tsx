@@ -65,18 +65,20 @@ function titleToComps(title: string, qty: number): Comps {
   return { pots: qty, fouets: 0, bols: 0, cuilleres: 0 }; // pot seul
 }
 
-// Mapping type ProduitOffert → composants
+// Mapping type ProduitOffert / Creator → composants
 function produitTypeToComps(produit: string, qty: number): Comps {
   switch (produit) {
-    case "pot":            return { pots: qty,      fouets: 0,   bols: 0,   cuilleres: 0   };
-    case "2_pots":         return { pots: 2 * qty,  fouets: 0,   bols: 0,   cuilleres: 0   };
-    case "3_pots":         return { pots: 3 * qty,  fouets: 0,   bols: 0,   cuilleres: 0   };
-    case "kit_decouverte": return { pots: qty,      fouets: qty, bols: 0,   cuilleres: 0   };
-    case "kit_ultime":     return { pots: qty,      fouets: qty, bols: qty, cuilleres: 0   };
-    case "fouet":          return { pots: 0,        fouets: qty, bols: 0,   cuilleres: 0   };
-    case "bol":            return { pots: 0,        fouets: 0,   bols: qty, cuilleres: 0   };
-    case "cuillere":       return { pots: 0,        fouets: 0,   bols: 0,   cuilleres: qty };
-    default:               return ZERO;
+    case "pot":               return { pots: qty,      fouets: 0,   bols: 0,   cuilleres: 0   };
+    case "2_pots":            return { pots: 2 * qty,  fouets: 0,   bols: 0,   cuilleres: 0   };
+    case "3_pots":            return { pots: 3 * qty,  fouets: 0,   bols: 0,   cuilleres: 0   };
+    case "kit_decouverte":    return { pots: qty,      fouets: qty, bols: 0,   cuilleres: 0   };
+    case "kit_ultime":        return { pots: qty,      fouets: qty, bols: qty, cuilleres: 0   };
+    case "fouet":             return { pots: 0,        fouets: qty, bols: 0,   cuilleres: 0   };
+    case "bol":               return { pots: 0,        fouets: 0,   bols: qty, cuilleres: 0   };
+    case "cuillere":          return { pots: 0,        fouets: 0,   bols: 0,   cuilleres: qty };
+    case "pot_cuillere":      return { pots: qty,      fouets: 0,   bols: 0,   cuilleres: qty };
+    case "pot_fouet_cuillere":return { pots: qty,      fouets: qty, bols: 0,   cuilleres: qty };
+    default:                  return ZERO;
   }
 }
 
@@ -186,16 +188,34 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
-  const [shopify, creatorAgg, nbContents, produitsOfferts] = await Promise.all([
+  const [shopify, creators, produitsOfferts] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
-    safeGet(() => prisma.creator.aggregate({ _sum: { coutTotalCollab: true }, _count: { _all: true } }),
-      { _sum: { coutTotalCollab: null }, _count: { _all: 0 } }),
-    safeGet(() => prisma.creator.count({ where: { lienVideo: { not: null } } }), 0),
+    safeGet(() => prisma.creator.findMany({ orderBy: { createdAt: "asc" } }), [] as Array<{
+      id: string; nom: string; instagram: string; type: string | null; pays: string;
+      produit: string; quantite: number; statut: string; fraisPort: number;
+      lienVideo: string | null; coutProduit: number | null; coutTotalCollab: number | null;
+      codePromo: string | null; trackingNumber: string | null; dateLivraison: string | null;
+    }>),
     safeGet(() => prisma.produitOffert.findMany({ orderBy: { date: "desc" } }),
       [] as Array<{ produit: string; quantite: number; coutTotal: number }>),
   ]);
 
-  // ── Produits offerts (hors Shopify) ──────────────────────────────────────────
+  // ── UGC / Creator → composants + coûts ──────────────────────────────────────
+  let ugcComps: Comps = { ...ZERO };
+  let ugcCogs = 0;
+  let ugcShipping = 0;
+  for (const c of creators) {
+    const comps = produitTypeToComps(c.produit, c.quantite);
+    ugcComps    = add(ugcComps, comps);
+    ugcCogs    += cogs(comps);
+    ugcShipping += c.fraisPort;
+  }
+  const nbCreateurs  = creators.length;
+  const nbPostes     = creators.filter(c => c.statut === "posté").length;
+  const nbContents   = creators.filter(c => c.lienVideo).length;
+  const ugcCoutMoyen = nbCreateurs > 0 ? (ugcCogs + ugcShipping) / nbCreateurs : 0;
+
+  // ── Produits offerts hors Creator (événements, cafés non-Creator, etc.) ──────
   let giftsComps: Comps = { ...ZERO };
   let cogsGifts = 0;
   for (const p of produitsOfferts) {
@@ -203,24 +223,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     cogsGifts += p.coutTotal;
   }
 
-  // ── Composants totaux consommés ───────────────────────────────────────────────
-  const totalComps = add(shopify.salesComps, giftsComps);
-
-  // ── Coûts variables (directs) ─────────────────────────────────────────────────
-  const ca               = shopify.revenue;
-  const nbCommandes      = shopify.orderCount;
-  const panierMoyen      = nbCommandes > 0 ? ca / nbCommandes : 0;
-  const cogsSales        = shopify.cogsSales;          // COGS des ventes Shopify
-  const cogsTotal        = cogsSales + cogsGifts;      // COGS réel (ventes + offerts)
-  const livraison        = shopify.shipping;
-  const coutsVariables   = cogsTotal + livraison;
-
-  // ── Charges fixes & UGC ──────────────────────────────────────────────────────
-  const fraisUgc         = creatorAgg._sum.coutTotalCollab ?? 0;
-  const totalHorsAds     = coutsVariables + TOTAL_CHARGES_FIXES + fraisUgc;
-
   // ── P&L ──────────────────────────────────────────────────────────────────────
-  const resultatBusiness = ca - totalHorsAds;          // hors ads
+  const ca             = shopify.revenue;
+  const nbCommandes    = shopify.orderCount;
+  const panierMoyen    = nbCommandes > 0 ? ca / nbCommandes : 0;
+  const cogsSales      = shopify.cogsSales;
+  const cogsTotal      = cogsSales + ugcCogs + cogsGifts;
+  const livraison      = shopify.shipping;
+  const coutsVariables = cogsTotal + livraison + ugcShipping;
+  const totalHorsAds   = coutsVariables + TOTAL_CHARGES_FIXES;
+
+  const resultatBusiness = ca - totalHorsAds;
   const margeBusiness    = ca > 0 ? (resultatBusiness / ca) * 100 : 0;
   const totalDepense     = totalHorsAds + ADS_BUDGET;
   const resultatGlobal   = ca - totalDepense;
@@ -228,11 +241,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const coutParCommande  = nbCommandes > 0 ? totalDepense / nbCommandes : 0;
   const profitParCmd     = nbCommandes > 0 ? resultatGlobal / nbCommandes : 0;
 
-  // ── Ads ───────────────────────────────────────────────────────────────────────
-  const margeVarParCmd   = nbCommandes > 0 ? resultatBusiness / nbCommandes : 0;
-  const seuilAds         = margeVarParCmd > 0 ? Math.ceil(ADS_BUDGET / margeVarParCmd) : 0;
+  const margeVarParCmd = nbCommandes > 0 ? resultatBusiness / nbCommandes : 0;
+  const seuilAds       = margeVarParCmd > 0 ? Math.ceil(ADS_BUDGET / margeVarParCmd) : 0;
 
-  // ── Stock par composant ───────────────────────────────────────────────────────
+  // ── Stock par composant (ventes + UGC + autres offerts) ───────────────────────
   type StockStat = { init: number; vendus: number; offerts: number; total: number; restant: number; pct: number; };
   function mkStat(init: number, vendus: number, offerts: number): StockStat {
     const total   = vendus + offerts;
@@ -240,27 +252,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return { init, vendus, offerts, total, restant, pct: init > 0 ? (total / init) * 100 : 0 };
   }
 
+  const allOfferts = add(ugcComps, giftsComps);
   const stock = {
-    pots:     mkStat(STOCK_INIT.pots,     shopify.salesComps.pots,     giftsComps.pots),
-    fouets:   mkStat(STOCK_INIT.fouets,   shopify.salesComps.fouets,   giftsComps.fouets),
-    bols:     mkStat(STOCK_INIT.bols,     shopify.salesComps.bols,     giftsComps.bols),
-    cuilleres:mkStat(STOCK_INIT.cuilleres,shopify.salesComps.cuilleres,giftsComps.cuilleres),
+    pots:     mkStat(STOCK_INIT.pots,     shopify.salesComps.pots,     allOfferts.pots),
+    fouets:   mkStat(STOCK_INIT.fouets,   shopify.salesComps.fouets,   allOfferts.fouets),
+    bols:     mkStat(STOCK_INIT.bols,     shopify.salesComps.bols,     allOfferts.bols),
+    cuilleres:mkStat(STOCK_INIT.cuilleres,shopify.salesComps.cuilleres,allOfferts.cuilleres),
   };
 
   const stockTotalAchete   = cogs({ pots: STOCK_INIT.pots, fouets: STOCK_INIT.fouets, bols: STOCK_INIT.bols, cuilleres: STOCK_INIT.cuilleres });
   const stockRestantValeur = stock.pots.restant * COUT.pot + stock.fouets.restant * COUT.fouet + stock.bols.restant * COUT.bol;
-  const stockMortValeur    = stock.cuilleres.restant * COUT.cuillere; // cuillères non vendables
+  const stockMortValeur    = stock.cuilleres.restant * COUT.cuillere;
 
   return {
     ca, nbCommandes, panierMoyen,
-    cogsSales, cogsGifts, cogsTotal, livraison, coutsVariables,
-    chargesFixes: CHARGES_FIXES, totalChargesFixes: TOTAL_CHARGES_FIXES, fraisUgc,
+    cogsSales, ugcCogs, cogsGifts, cogsTotal, livraison, ugcShipping, coutsVariables,
+    chargesFixes: CHARGES_FIXES, totalChargesFixes: TOTAL_CHARGES_FIXES,
     totalHorsAds, resultatBusiness, margeBusiness,
     adsBudget: ADS_BUDGET, seuilAds,
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
     stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
-    nbCreateurs: creatorAgg._count._all ?? 0,
-    nbContents:  nbContents ?? 0,
+    nbCreateurs, nbPostes, nbContents, ugcCoutMoyen,
+    creators,
     orderBreakdowns: shopify.orderBreakdowns,
     scopeError: shopify.scopeError,
   };
@@ -375,7 +388,10 @@ export default function Dashboard() {
               <p style={{ margin: "3px 0 0", fontSize: 12, color: T.muted }}>Données en temps réel · {d.nbCommandes} commandes · CA {eur(d.ca)}</p>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <a href="/app/produits-offerts" style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "4px 10px", borderRadius: 99, border: "1px solid #c7d2fe", textDecoration: "none" }}>
+              <a href="/app/ugc" style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "4px 10px", borderRadius: 99, border: "1px solid #c7d2fe", textDecoration: "none" }}>
+                UGC →
+              </a>
+              <a href="/app/produits-offerts" style={{ fontSize: 11, color: T.muted, background: "#f8fafc", padding: "4px 10px", borderRadius: 99, border: `1px solid ${T.border}`, textDecoration: "none" }}>
                 Produits offerts →
               </a>
             </div>
@@ -398,13 +414,15 @@ export default function Dashboard() {
             <div style={{ marginBottom: 8, fontSize: 11, fontWeight: 600, color: T.dim, textTransform: "uppercase", letterSpacing: "0.08em" }}>
               Coûts variables
             </div>
-            <div className="g3" style={{ marginBottom: 16 }}>
+            <div className="g4" style={{ marginBottom: 16 }}>
               <MCard label="COGS — ventes Shopify" value={eur(d.cogsSales)}
                 sub={`${((d.cogsSales / Math.max(d.ca, 1)) * 100).toFixed(1)} % du CA`} color={T.red} />
-              <MCard label="COGS — produits offerts" value={eur(d.cogsGifts)}
-                sub={d.cogsGifts > 0 ? "UGC, cafés, événements" : "Aucun enregistré"}
+              <MCard label="COGS — UGC & collabs" value={eur(d.ugcCogs)}
+                sub={`${d.nbCreateurs} créateurs · produits envoyés`} color={T.red} />
+              <MCard label="COGS — autres offerts" value={eur(d.cogsGifts)}
+                sub={d.cogsGifts > 0 ? "Événements, démos" : "Aucun enregistré"}
                 color={d.cogsGifts > 0 ? T.red : T.muted} />
-              <MCard label="Frais livraison" value={eur(d.livraison)}
+              <MCard label="Livraison commandes" value={eur(d.livraison)}
                 sub={`${((d.livraison / Math.max(d.ca, 1)) * 100).toFixed(1)} % du CA`} color={T.red} />
             </div>
 
@@ -422,16 +440,16 @@ export default function Dashboard() {
                       <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(c.montant)}</td>
                     </tr>
                   ))}
-                  {d.fraisUgc > 0 && (
+                  {d.ugcShipping > 0 && (
                     <tr style={{ borderTop: `1px solid ${T.border}` }}>
-                      <td style={{ padding: "10px 16px", color: T.text, fontWeight: 500 }}>Frais UGC (port + collabs)</td>
-                      <td style={{ padding: "10px 16px", color: T.muted, fontSize: 12 }}>via table Creator</td>
-                      <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.fraisUgc)}</td>
+                      <td style={{ padding: "10px 16px", color: T.text, fontWeight: 500 }}>Livraison UGC & collabs</td>
+                      <td style={{ padding: "10px 16px", color: T.muted, fontSize: 12 }}>{d.nbCreateurs} colis</td>
+                      <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcShipping)}</td>
                     </tr>
                   )}
                   <tr style={{ borderTop: `2px solid ${T.border}`, background: "#f8fafc" }}>
                     <td colSpan={2} style={{ padding: "10px 16px", fontWeight: 700, color: T.text }}>Total charges fixes</td>
-                    <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 800, color: T.red, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{eur(d.totalChargesFixes + d.fraisUgc)}</td>
+                    <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 800, color: T.red, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{eur(d.totalChargesFixes + d.ugcShipping)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -650,10 +668,66 @@ export default function Dashboard() {
 
           {/* ══ UGC ══════════════════════════════════════════════════════════ */}
           <section>
-            <SectionLabel>UGC</SectionLabel>
-            <div className="g2">
-              <MCard label="Créateurs" value={String(d.nbCreateurs)} sub="collabs total" />
-              <MCard label="Contenus postés" value={String(d.nbContents)} sub="vidéos avec lien" />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <SectionLabel>UGC & Collabs</SectionLabel>
+              <a href="/app/ugc" style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "4px 10px", borderRadius: 99, border: "1px solid #c7d2fe", textDecoration: "none" }}>
+                Gérer →
+              </a>
+            </div>
+
+            <div className="g4" style={{ marginBottom: 16 }}>
+              <MCard label="Créateurs" value={String(d.nbCreateurs)} sub="UGC + influence + café" />
+              <MCard label="Postés" value={String(d.nbPostes)} sub="contenu publié" color={T.green} />
+              <MCard label="Coût total UGC" value={eur(d.ugcCogs + d.ugcShipping)}
+                sub={`produits ${eur(d.ugcCogs)} + port ${eur(d.ugcShipping)}`} color={T.red} />
+              <MCard label="Coût moyen / créateur" value={eur(d.ugcCoutMoyen)}
+                sub="produit + livraison" color={T.orange} />
+            </div>
+
+            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", boxShadow: T.shadow }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: "#f1f5f9" }}>
+                      {["Nom", "Type", "Pays", "Produit", "Port", "COGS", "Total", "Statut"].map(h => (
+                        <th key={h} style={{ padding: "9px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.creators.map((c, i) => {
+                      const statutColor = c.statut === "posté" ? T.green : c.statut === "reçu" ? T.orange : T.muted;
+                      const statutBg    = c.statut === "posté" ? T.greenBg : c.statut === "reçu" ? T.orangeBg : "#f1f5f9";
+                      const typeLabel   = { ugc: "UGC", influence: "Influence", cafe: "Café", autre: "Autre" }[c.type ?? ""] ?? c.type ?? "—";
+                      return (
+                        <tr key={c.id} style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                          <td style={{ padding: "8px 12px", fontWeight: 600, color: T.text }}>{c.nom}</td>
+                          <td style={{ padding: "8px 12px" }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 99, background: "#eef2ff", color: T.accent }}>{typeLabel}</span>
+                          </td>
+                          <td style={{ padding: "8px 12px", color: T.muted }}>{c.pays}</td>
+                          <td style={{ padding: "8px 12px", color: T.text, fontSize: 11 }}>{c.produit.replace(/_/g, " ")}</td>
+                          <td style={{ padding: "8px 12px", color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(c.fraisPort)}</td>
+                          <td style={{ padding: "8px 12px", color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
+                          <td style={{ padding: "8px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
+                          <td style={{ padding: "8px 12px" }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: statutBg, color: statutColor }}>{c.statut}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ background: "#f1f5f9", borderTop: `2px solid ${T.border}` }}>
+                      <td colSpan={4} style={{ padding: "9px 12px", fontWeight: 700, color: T.text }}>Total</td>
+                      <td style={{ padding: "9px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcShipping)}</td>
+                      <td style={{ padding: "9px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcCogs)}</td>
+                      <td style={{ padding: "9px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcCogs + d.ugcShipping)}</td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             </div>
           </section>
 
