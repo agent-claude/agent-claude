@@ -85,11 +85,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       cogs:    acc.cogs    + (c.coutProduit     ?? 0),
       port:    acc.port    + c.fraisPort,
       total:   acc.total   + (c.coutTotalCollab ?? 0),
-      postés:  acc.postés  + (c.statut === "posté"  ? 1 : 0),
-      envoyés: acc.envoyés + (c.statut === "envoyé" ? 1 : 0),
-      reçus:   acc.reçus   + (c.statut === "reçu"   ? 1 : 0),
+      postés:  acc.postés  + (c.statut === "posté"          ? 1 : 0),
+      envoyés: acc.envoyés + (c.statut === "envoyé"         ? 1 : 0),
+      reçus:   acc.reçus   + (c.statut === "reçu"           ? 1 : 0),
+      enPrep:  acc.enPrep  + (c.statut === "en_preparation" ? 1 : 0),
     }),
-    { cogs: 0, port: 0, total: 0, postés: 0, envoyés: 0, reçus: 0 },
+    { cogs: 0, port: 0, total: 0, postés: 0, envoyés: 0, reçus: 0, enPrep: 0 },
   );
   return { creators, totaux };
 };
@@ -140,6 +141,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         codePromo:      (form.get("codePromo") as string) || null,
         dateLivraison:  (form.get("dateLivraison") as string) || null,
         lienVideo:      (form.get("lienVideo") as string) || null,
+        notes:          (form.get("notes") as string) || null,
         coutProduit:    cp,
         coutTotalCollab: cp + port,
       },
@@ -212,13 +214,13 @@ const cell: React.CSSProperties = { padding: "8px 12px", color: "#0f172a" };
 function CreatorRow({ c, i }: {
   c: { id: string; nom: string; instagram: string; type: string | null; pays: string; produit: string;
        statut: string; fraisPort: number; lienVideo: string | null; coutProduit: number | null;
-       coutTotalCollab: number | null; };
+       coutTotalCollab: number | null; notes: string | null; };
   i: number;
 }) {
   const fetcher    = useFetcher();
   const statut     = String(fetcher.formData?.get("statut") ?? c.statut);
-  const statutColor = statut === "posté" ? T.green : statut === "reçu" ? T.orange : T.muted;
-  const statutBg    = statut === "posté" ? T.greenBg : statut === "reçu" ? T.orangeBg : "#f1f5f9";
+  const statutColor = statut === "posté" ? T.green : statut === "reçu" ? T.orange : statut === "en_preparation" ? "#7c3aed" : T.muted;
+  const statutBg    = statut === "posté" ? T.greenBg : statut === "reçu" ? T.orangeBg : statut === "en_preparation" ? "#f5f3ff" : "#f1f5f9";
   const typeLabel   = TYPE_LABELS[c.type ?? ""] ?? c.type ?? "—";
   const comps       = keyToComps(c.produit, 1);
 
@@ -248,6 +250,7 @@ function CreatorRow({ c, i }: {
           <input type="hidden" name="id" value={c.id} />
           <select name="statut" defaultValue={c.statut}
             style={{ ...inp, width: "auto", fontSize: 12, padding: "3px 7px", background: statutBg, color: statutColor, fontWeight: 700 }}>
+            <option value="en_preparation">En préparation</option>
             <option value="envoyé">Envoyé</option>
             <option value="reçu">Reçu</option>
             <option value="posté">Posté</option>
@@ -264,6 +267,9 @@ function CreatorRow({ c, i }: {
         {c.lienVideo
           ? <a href={c.lienVideo} target="_blank" rel="noreferrer" style={{ color: T.accent, fontSize: 12 }}>Voir →</a>
           : <span style={{ color: T.dim }}>—</span>}
+      </td>
+      <td style={{ ...cell, color: T.muted, fontSize: 11, maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {c.notes ?? "—"}
       </td>
       <td style={cell}>
         <fetcher.Form method="post">
@@ -392,7 +398,7 @@ export default function UGCPage() {
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Total créateurs</div>
             <div style={{ fontSize: 24, fontWeight: 700, color: T.text }}>{creators.length}</div>
             <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
-              {totaux.postés} postés · {totaux.reçus} reçus · {totaux.envoyés} envoyés
+              {totaux.postés} postés · {totaux.reçus} reçus · {totaux.envoyés} envoyés · {totaux.enPrep} en prépa
             </div>
           </div>
           <div style={{ background: T.redBg, border: `1px solid ${T.redBdr}`, borderRadius: 14, padding: "16px 18px" }}>
@@ -464,9 +470,14 @@ export default function UGCPage() {
                 <input name="dateLivraison" type="date" style={inp} />
               </label>
             </div>
-            <label style={{ ...lbl, marginBottom: 14 }}><span style={lbT}>Lien vidéo</span>
-              <input name="lienVideo" type="url" placeholder="https://..." style={inp} />
-            </label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+              <label style={lbl}><span style={lbT}>Lien vidéo</span>
+                <input name="lienVideo" type="url" placeholder="https://..." style={inp} />
+              </label>
+              <label style={lbl}><span style={lbT}>Notes</span>
+                <input name="notes" placeholder="ex: 2 vidéos, contrat à faire..." style={inp} />
+              </label>
+            </div>
             <button type="submit" disabled={submitting} style={{
               background: T.accent, color: "#fff", border: "none", borderRadius: 10,
               padding: "10px 20px", fontWeight: 600, fontSize: 13, cursor: "pointer",
@@ -484,7 +495,7 @@ export default function UGCPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / Lien vidéo", "Vidéo", ""].map(h => (
+                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Statut / Lien vidéo", "Vidéo", "Notes", ""].map(h => (
                       <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                     ))}
                   </tr>
@@ -498,7 +509,7 @@ export default function UGCPage() {
                     <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.port)}</td>
                     <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.cogs)}</td>
                     <td style={{ padding: "10px 12px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totaux.total)}</td>
-                    <td colSpan={3} />
+                    <td colSpan={4} />
                   </tr>
                 </tfoot>
               </table>

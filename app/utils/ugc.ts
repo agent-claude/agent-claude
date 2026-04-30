@@ -39,35 +39,45 @@ function norm(s: string): string {
 export function parseUgcProduit(text: string): Comps {
   const t = norm(text);
 
-  // Kit ultime / complet (most specific — check first)
+  // ── Kit ultime / complet (most specific — toujours en premier) ───────────────
   if (
     t.includes("kit ultime") ||
     t.includes("kit complet") ||
-    t.includes("kit ultimate")
+    t.includes("kit ultimate") ||
+    t.includes("full set") ||
+    t.includes("set complet") ||
+    // "set" seul (Dounia "set") — éviter de matcher "fouet" ou "reset"
+    /(?:^|[\s,+])set(?:[\s,+]|$)/.test(t)
   ) {
     return { pots: 1, fouets: 1, bols: 1, cuilleres: 0 };
   }
 
-  // Kit découverte
+  // ── Kit découverte ────────────────────────────────────────────────────────────
   if (t.includes("kit decouverte") || t.includes("kit découverte")) {
     return { pots: 1, fouets: 1, bols: 0, cuilleres: 0 };
   }
 
-  // Parsing composant par composant
+  // ── Parsing composant par composant ──────────────────────────────────────────
   let pots      = 0;
   let fouets    = 0;
   let bols      = 0;
   let cuilleres = 0;
 
-  // Quantité de pots : "2 pot", "3 pots", "2x pot", etc.
-  const qtyPot = t.match(/(\d+)\s*(?:x\s*)?(?:pot|poudre|laya)/);
+  // Quantité de pots : "2 pot", "3 pots", "2 ube", etc.
+  const qtyPot = t.match(/(\d+)\s*(?:x\s*)?(?:pot|pots|poudre|laya|ube)/);
   if (qtyPot) {
     pots = parseInt(qtyPot[1], 10);
-  } else if (t.includes("pot") || t.includes("poudre") || t.includes("laya")) {
+  } else if (
+    t.includes("pot") ||
+    t.includes("poudre") ||
+    t.includes("laya") ||
+    t.includes("ube") ||       // UBE = matcha pot
+    t.includes("un pot")       // "un pot" en français
+  ) {
     pots = 1;
   }
 
-  // Cuillère : "cuillere", "cuillière", "spoon", "petite cuillere"
+  // Cuillère
   if (
     t.includes("cuillere") ||
     t.includes("cuilliere") ||
@@ -78,13 +88,14 @@ export function parseUgcProduit(text: string): Comps {
   }
 
   // Fouet
-  if (t.includes("fouet")) {
-    fouets = 1;
-  }
+  if (t.includes("fouet")) fouets = 1;
 
   // Bol
-  if (t.includes("bol")) {
-    bols = 1;
+  if (t.includes("bol")) bols = 1;
+
+  // ── Fallback : texte non reconnu → 1 pot par défaut ──────────────────────────
+  if (pots === 0 && fouets === 0 && bols === 0 && cuilleres === 0) {
+    pots = 1;
   }
 
   return { pots, fouets, bols, cuilleres };

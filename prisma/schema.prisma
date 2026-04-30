@@ -45,6 +45,7 @@ model Creator {
   quantite        Int      @default(1)
   coutProduit     Float?
   coutTotalCollab Float?
+  notes           String?
   createdAt       DateTime @default(now())
 }
 

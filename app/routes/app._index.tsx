@@ -193,7 +193,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     safeGet(() => prisma.creator.findMany({ orderBy: { createdAt: "asc" } }), [] as Array<{
       id: string; nom: string; instagram: string; type: string | null; pays: string;
       produit: string; quantite: number; statut: string; fraisPort: number;
-      lienVideo: string | null; coutProduit: number | null; coutTotalCollab: number | null;
+      lienVideo: string | null; coutProduit: number | null; coutTotalCollab: number | null; notes: string | null;
       codePromo: string | null; trackingNumber: string | null; dateLivraison: string | null;
     }>),
     safeGet(() => prisma.produitOffert.findMany({ orderBy: { date: "desc" } }),
@@ -696,8 +696,8 @@ export default function Dashboard() {
                   </thead>
                   <tbody>
                     {d.creators.map((c, i) => {
-                      const statutColor = c.statut === "posté" ? T.green : c.statut === "reçu" ? T.orange : T.muted;
-                      const statutBg    = c.statut === "posté" ? T.greenBg : c.statut === "reçu" ? T.orangeBg : "#f1f5f9";
+                      const statutColor = c.statut === "posté" ? T.green : c.statut === "reçu" ? T.orange : c.statut === "en_preparation" ? "#7c3aed" : T.muted;
+                      const statutBg    = c.statut === "posté" ? T.greenBg : c.statut === "reçu" ? T.orangeBg : c.statut === "en_preparation" ? "#f5f3ff" : "#f1f5f9";
                       const typeLabel   = { ugc: "UGC", influence: "Influence", cafe: "Café", autre: "Autre" }[c.type ?? ""] ?? c.type ?? "—";
                       return (
                         <tr key={c.id} style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
