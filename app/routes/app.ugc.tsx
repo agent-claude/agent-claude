@@ -117,13 +117,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "update_tracking") {
     const id             = form.get("id") as string;
     const trackingNumber = (form.get("trackingNumber") as string) || null;
-    const data: Record<string, unknown> = { trackingNumber };
-    // auto-avancer le statut colis quand un numéro est saisi
-    if (trackingNumber) {
-      const current = await prisma.creator.findUnique({ where: { id }, select: { shippingStatus: true } });
-      if (current?.shippingStatus === "preparation") data.shippingStatus = "envoye";
-    }
-    await prisma.creator.update({ where: { id }, data });
+    await prisma.creator.update({ where: { id }, data: { trackingNumber } });
     return null;
   }
 
