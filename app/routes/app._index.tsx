@@ -84,7 +84,6 @@ const ORDERS_QUERY = `
         node {
           id name
           displayFinancialStatus
-          financialStatus
           currentTotalPriceSet { shopMoney { amount } }
           shippingAddress { countryCode }
           lineItems(first: 10) {
@@ -99,7 +98,6 @@ const ORDERS_QUERY = `
 interface OrderNode {
   id?: string; name?: string;
   displayFinancialStatus?: string;
-  financialStatus?: string;
   currentTotalPriceSet?: { shopMoney?: { amount?: string } };
   shippingAddress?: { countryCode?: string };
   lineItems?: { edges: { node: { title?: string; quantity?: number } }[] };
@@ -111,7 +109,7 @@ interface OrderBreakdown {
   name: string; revenue: number; country: string;
   items: LineBreakdown[];
   orderComps: Comps; orderCogs: number; shipping: number;
-  financialStatus: string;
+  displayFinancialStatus: string;
   isRefunded: boolean;
 }
 
@@ -189,13 +187,12 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
     const orderBreakdowns: OrderBreakdown[] = [];
 
     for (const node of allNodes) {
-      const rawStatus     = (node.financialStatus ?? "").toUpperCase();
-      const displayStatus = node.displayFinancialStatus ?? node.financialStatus ?? "";
-      const isRefunded    = rawStatus === "REFUNDED" || (node.displayFinancialStatus ?? "").toUpperCase() === "REFUNDED";
+      const displayStatus = (node.displayFinancialStatus ?? "").toUpperCase();
+      const isRefunded    = displayStatus === "REFUNDED";
       const rev     = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
 
       if (node.name === "#1007" || node.name === "#1001") {
-        console.log(`[Order ${node.name}] financialStatus=${node.financialStatus ?? "null"} displayFinancialStatus=${node.displayFinancialStatus ?? "null"} isRefunded=${isRefunded} revenue=${rev}`);
+        console.log(`[Order ${node.name}] displayFinancialStatus=${node.displayFinancialStatus ?? "null"} isRefunded=${isRefunded} revenue=${rev}`);
       }
       const country = (node.shippingAddress?.countryCode ?? "").toUpperCase();
       const items: LineBreakdown[] = (node.lineItems?.edges ?? []).map(({ node: li }) => {
@@ -222,7 +219,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
         items,
         orderComps, orderCogs,
         shipping: ship,
-        financialStatus: displayStatus,
+        displayFinancialStatus: displayStatus,
         isRefunded,
       });
     }
@@ -341,7 +338,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   console.log(`[Loader] ✅ ${shopify.orderBreakdowns.length} commandes envoyées au frontend :`);
   shopify.orderBreakdowns.forEach(o =>
-    console.log(`  ${o.name} | isRefunded=${o.isRefunded} | items=${o.items.length} | revenue=${o.revenue} | status="${o.financialStatus}"`)
+    console.log(`  ${o.name} | isRefunded=${o.isRefunded} | items=${o.items.length} | revenue=${o.revenue} | status="${o.displayFinancialStatus}"`)
   );
 
   return {
@@ -740,7 +737,7 @@ export default function Dashboard() {
                     const statusBadge = (
                       order.isRefunded
                         ? <span style={{ background: T.redBg, color: T.red, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Remboursée</span>
-                        : order.financialStatus.toUpperCase() === "PARTIALLY_REFUNDED"
+                        : order.displayFinancialStatus === "PARTIALLY_REFUNDED"
                           ? <span style={{ background: T.orangeBg, color: T.orange, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Part. remboursée</span>
                           : <span style={{ background: T.greenBg, color: T.green, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Payée</span>
                     );
