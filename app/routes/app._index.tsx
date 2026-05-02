@@ -132,13 +132,15 @@ function shippingCost(items: LineBreakdown[], country: string): number {
 
 interface ShopifyResult {
   revenue: number; shipping: number; cogsSales: number;
-  salesComps: Comps; orderCount: number;
+  salesComps: Comps;
+  orderCount: number;   // toutes commandes (affichage)
+  paidCount: number;    // hors remboursées (métriques par commande)
   orderBreakdowns: OrderBreakdown[]; scopeError: boolean;
   order1001: string;
 }
 
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyResult> {
-  const zero: ShopifyResult = { revenue: 0, shipping: 0, cogsSales: 0, salesComps: { ...ZERO }, orderCount: 0, orderBreakdowns: [], scopeError: false, order1001: "" };
+  const zero: ShopifyResult = { revenue: 0, shipping: 0, cogsSales: 0, salesComps: { ...ZERO }, orderCount: 0, paidCount: 0, orderBreakdowns: [], scopeError: false, order1001: "" };
   try {
     let cursor: string | null = null;
     const allNodes: OrderNode[] = [];
@@ -235,7 +237,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       if (!order1001) order1001 = "❌ #1001 non renvoyée par Shopify API (ni name:#1001 ni #1001)";
     }
 
-    let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0;
+    let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0, paidCount = 0;
     let salesComps: Comps = { ...ZERO };
     const orderBreakdowns: OrderBreakdown[] = [];
 
@@ -260,12 +262,13 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       const orderCogs  = cogs(orderComps);
       const ship       = shippingCost(items, country);
 
+      orderCount++; // toutes commandes sans exception
       if (!isRefunded) {
-        revenue    += rev;
-        shipping   += ship;
-        cogsSales  += orderCogs;
-        salesComps  = add(salesComps, orderComps);
-        orderCount++;
+        revenue   += rev;
+        shipping  += ship;
+        cogsSales += orderCogs;
+        salesComps = add(salesComps, orderComps);
+        paidCount++;
       }
 
       orderBreakdowns.push({
@@ -279,7 +282,8 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
         isRefunded,
       });
     }
-    return { revenue, shipping, cogsSales, salesComps, orderCount, orderBreakdowns, scopeError: false, order1001 };
+    console.log(`[FINAL COUNT] orderCount=${orderCount} paidCount=${paidCount} orderBreakdowns=${orderBreakdowns.length}`);
+    return { revenue, shipping, cogsSales, salesComps, orderCount, paidCount, orderBreakdowns, scopeError: false, order1001 };
   } catch (err) {
     console.error(`[Dashboard] fetchShopifyOrders error (${shop}):`, err);
     return zero;
@@ -370,8 +374,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // ── P&L ──────────────────────────────────────────────────────────────────────
   const ca             = shopify.revenue;
-  const nbCommandes    = shopify.orderCount;
-  const panierMoyen    = nbCommandes > 0 ? ca / nbCommandes : 0;
+  const nbCommandes    = shopify.orderCount;   // toutes commandes (affichage)
+  const paidCount      = shopify.paidCount;    // hors remboursées (diviseur métriques)
+  const panierMoyen    = paidCount > 0 ? ca / paidCount : 0;
   const cogsSales      = shopify.cogsSales;
   const cogsTotal      = cogsSales + ugcCogs + cogsGifts;
   const livraison      = shopify.shipping;
@@ -383,10 +388,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const totalDepense     = totalHorsAds + adsBudget;
   const resultatGlobal   = ca - totalDepense;
   const margeGlobale     = ca > 0 ? (resultatGlobal / ca) * 100 : 0;
-  const coutParCommande  = nbCommandes > 0 ? totalDepense / nbCommandes : 0;
-  const profitParCmd     = nbCommandes > 0 ? resultatGlobal / nbCommandes : 0;
+  const coutParCommande  = paidCount > 0 ? totalDepense / paidCount : 0;
+  const profitParCmd     = paidCount > 0 ? resultatGlobal / paidCount : 0;
 
-  const margeVarParCmd = nbCommandes > 0 ? resultatBusiness / nbCommandes : 0;
+  const margeVarParCmd = paidCount > 0 ? resultatBusiness / paidCount : 0;
   const seuilAds       = margeVarParCmd > 0 && adsBudget > 0 ? Math.ceil(adsBudget / margeVarParCmd) : 0;
 
   // ── Stock par composant (ventes + UGC + autres offerts) ───────────────────────
