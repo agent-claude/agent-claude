@@ -183,6 +183,28 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
     console.log("[ORDERS]", allNodes.map(o => o.name));
 
+    // ── Requête ciblée : cherche #1001 si absente ────────────────────────────
+    const has1001 = allNodes.some(o => o.name === "#1001");
+    if (!has1001) {
+      for (const q of [`name:#1001`, `#1001`]) {
+        const r1 = await admin.graphql(`{
+          orders(first: 1, query: "${q}") {
+            edges { node {
+              id name displayFinancialStatus
+              currentTotalPriceSet  { shopMoney { amount } }
+              originalTotalPriceSet { shopMoney { amount } }
+              shippingAddress { countryCode }
+              lineItems(first: 10) { edges { node { title quantity } } }
+            }}
+          }
+        }`);
+        const d1 = (await r1.json()) as { data?: { orders?: { edges: { node: OrderNode }[] } } };
+        const node1 = d1.data?.orders?.edges?.[0]?.node;
+        console.log(`[#1001 search query="${q}"]`, node1 ? `found: ${node1.name}` : "not found");
+        if (node1?.name === "#1001") { allNodes.push(node1); break; }
+      }
+    }
+
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0;
     let salesComps: Comps = { ...ZERO };
     const orderBreakdowns: OrderBreakdown[] = [];
@@ -282,12 +304,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     cogsGifts += p.coutTotal;
   }
 
-  // ── Dépenses ─────────────────────────────────────────────────────────────────
-  const adsBudget           = expenses.filter(e => e.category === "Publicité Meta").reduce((s, e) => s + e.amount, 0);
-  const totalExpenses       = expenses.reduce((s, e) => s + e.amount, 0);
+  // ── Dépenses — fallback hardcodé si table vide ───────────────────────────────
+  const CHARGES_FIXES_FALLBACK = expenses.length === 0 ? [
+    { category: "Packaging",  label: "Cartons d'expédition", amount: 95  },
+    { category: "Packaging",  label: "Flyers",               amount: 55  },
+    { category: "Graphiste",  label: "Graphiste",            amount: 100 },
+    { category: "Shopify",    label: "Shopify",              amount: 66  },
+    { category: "Packaging",  label: "Stickers",             amount: 100 },
+    { category: "Événements", label: "Événements",           amount: 450 },
+  ] : [];
+  const effectiveExpenses = expenses.length > 0 ? expenses : CHARGES_FIXES_FALLBACK;
+
+  const adsBudget           = effectiveExpenses.filter(e => e.category === "Publicité Meta").reduce((s, e) => s + e.amount, 0);
+  const totalExpenses       = effectiveExpenses.reduce((s, e) => s + e.amount, 0);
   const totalExpensesNonAds = totalExpenses - adsBudget;
   const expensesByCategory  = Object.entries(
-    expenses.filter(e => e.category !== "Publicité Meta").reduce((acc, e) => {
+    effectiveExpenses.filter(e => e.category !== "Publicité Meta").reduce((acc, e) => {
       acc[e.category] = (acc[e.category] ?? 0) + e.amount;
       return acc;
     }, {} as Record<string, number>)
