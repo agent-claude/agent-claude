@@ -181,7 +181,26 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       }
     } while (true);
 
-    console.log("[ORDERS]", allNodes.map(o => o.name));
+    // Log complet : name + id pour chaque commande reçue
+    console.log(`[ORDERS] ${allNodes.length} commandes reçues :`);
+    allNodes.forEach(o => console.log(`  name=${o.name}  id=${o.id ?? "?"}`));
+
+    // Détection de trous dans la numérotation
+    const nums = allNodes
+      .map(o => parseInt((o.name ?? "").replace("#", ""), 10))
+      .filter(n => !isNaN(n))
+      .sort((a, b) => a - b);
+    if (nums.length >= 2) {
+      const missing: number[] = [];
+      for (let i = nums[0]; i <= nums[nums.length - 1]; i++) {
+        if (!nums.includes(i)) missing.push(i);
+      }
+      if (missing.length > 0) {
+        console.warn(`[ORDERS] Commandes manquantes dans la séquence : ${missing.map(n => "#" + n).join(", ")}`);
+      } else {
+        console.log(`[ORDERS] Séquence continue de #${nums[0]} à #${nums[nums.length - 1]} — aucun trou`);
+      }
+    }
 
     // ── Requête ciblée : cherche #1001 si absente ────────────────────────────
     const has1001 = allNodes.some(o => o.name === "#1001");
