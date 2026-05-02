@@ -84,8 +84,7 @@ const ORDERS_QUERY = `
         node {
           id name createdAt
           displayFinancialStatus
-          currentTotalPriceSet  { shopMoney { amount currencyCode } }
-          originalTotalPriceSet { shopMoney { amount } }
+          currentTotalPriceSet { shopMoney { amount currencyCode } }
           shippingAddress { countryCode }
           lineItems(first: 10) {
             edges { node { title quantity } }
@@ -99,8 +98,7 @@ const ORDERS_QUERY = `
 interface OrderNode {
   id?: string; name?: string; createdAt?: string;
   displayFinancialStatus?: string;
-  currentTotalPriceSet?:  { shopMoney?: { amount?: string; currencyCode?: string } };
-  originalTotalPriceSet?: { shopMoney?: { amount?: string } };
+  currentTotalPriceSet?: { shopMoney?: { amount?: string; currencyCode?: string } };
   shippingAddress?: { countryCode?: string };
   lineItems?: { edges: { node: { title?: string; quantity?: number } }[] };
 }
@@ -136,11 +134,10 @@ interface ShopifyResult {
   orderCount: number;   // toutes commandes (affichage)
   paidCount: number;    // hors remboursées (métriques par commande)
   orderBreakdowns: OrderBreakdown[]; scopeError: boolean;
-  order1001: string;
 }
 
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyResult> {
-  const zero: ShopifyResult = { revenue: 0, shipping: 0, cogsSales: 0, salesComps: { ...ZERO }, orderCount: 0, paidCount: 0, orderBreakdowns: [], scopeError: false, order1001: "" };
+  const zero: ShopifyResult = { revenue: 0, shipping: 0, cogsSales: 0, salesComps: { ...ZERO }, orderCount: 0, paidCount: 0, orderBreakdowns: [], scopeError: false };
   try {
     let cursor: string | null = null;
     const allNodes: OrderNode[] = [];
@@ -148,8 +145,6 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
     do {
       const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor } });
       const rawText = await res.text();
-      const preview = rawText.length > 800 ? rawText.slice(0, 800) + "…" : rawText;
-      console.log(`[DEBUG] GraphQL raw response (page cursor=${cursor ?? "null"}, status=${res.status}):`, preview);
 
       let data: {
         data?: { orders?: { pageInfo: { hasNextPage: boolean; endCursor: string }; edges: { node: OrderNode }[] } };
@@ -175,67 +170,12 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
       for (const { node } of page.edges) allNodes.push(node);
 
-      console.log(`[Orders] Page chargée : ${page.edges.length} commandes — hasNextPage: ${page.pageInfo.hasNextPage}`);
-
       if (page.pageInfo.hasNextPage) {
         cursor = page.pageInfo.endCursor;
       } else {
         break;
       }
     } while (true);
-
-    console.log(`[ORDERS COUNT] ${allNodes.length}`);
-    console.log(`[ORDERS NAMES]`, allNodes.map(o => o.name));
-    allNodes.forEach(o =>
-      console.log(`[ORDER RAW STATUS] name=${o.name} id=${o.id ?? "?"} createdAt=${o.createdAt ?? "?"} displayFinancialStatus=${o.displayFinancialStatus ?? "?"} amount=${o.currentTotalPriceSet?.shopMoney?.amount ?? "?"} ${o.currentTotalPriceSet?.shopMoney?.currencyCode ?? ""}`)
-    );
-
-    // Détection de trous dans la numérotation
-    const nums = allNodes
-      .map(o => parseInt((o.name ?? "").replace("#", ""), 10))
-      .filter(n => !isNaN(n))
-      .sort((a, b) => a - b);
-    if (nums.length >= 2) {
-      const missing: number[] = [];
-      for (let i = nums[0]; i <= nums[nums.length - 1]; i++) {
-        if (!nums.includes(i)) missing.push(i);
-      }
-      if (missing.length > 0) {
-        console.warn(`[ORDERS] Commandes manquantes dans la séquence : ${missing.map(n => "#" + n).join(", ")}`);
-      } else {
-        console.log(`[ORDERS] Séquence continue de #${nums[0]} à #${nums[nums.length - 1]} — aucun trou`);
-      }
-    }
-
-    // ── Requête ciblée #1001 ─────────────────────────────────────────────────
-    let order1001 = "";
-    const has1001 = allNodes.some(o => o.name === "#1001");
-    if (has1001) {
-      order1001 = "✅ présente dans la liste principale";
-    } else {
-      for (const q of [`name:#1001`, `#1001`]) {
-        const r1 = await admin.graphql(`{
-          orders(first: 5, query: "${q}") {
-            edges { node {
-              id name createdAt displayFinancialStatus
-              currentTotalPriceSet { shopMoney { amount currencyCode } }
-              originalTotalPriceSet { shopMoney { amount } }
-              shippingAddress { countryCode }
-              lineItems(first: 10) { edges { node { title quantity } } }
-            }}
-          }
-        }`);
-        const d1 = (await r1.json()) as { data?: { orders?: { edges: { node: OrderNode }[] } } };
-        const node1 = d1.data?.orders?.edges?.[0]?.node;
-        console.log(`[#1001 query="${q}"]`, node1 ? `found name=${node1.name} status=${node1.displayFinancialStatus}` : "not found");
-        if (node1?.name === "#1001") {
-          allNodes.push(node1);
-          order1001 = `✅ trouvée via query:"${q}" status=${node1.displayFinancialStatus} amount=${node1.currentTotalPriceSet?.shopMoney?.amount ?? "?"}`;
-          break;
-        }
-      }
-      if (!order1001) order1001 = "❌ #1001 non renvoyée par Shopify API (ni name:#1001 ni #1001)";
-    }
 
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0, paidCount = 0;
     let salesComps: Comps = { ...ZERO };
@@ -246,11 +186,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       const displayStatus = (node.displayFinancialStatus ?? "").toUpperCase();
       const isRefunded    = displayStatus === "REFUNDED";   // PARTIALLY_REFUNDED ≠ remboursé
       const totalPrice    = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
-      const originalPrice = parseFloat(node.originalTotalPriceSet?.shopMoney?.amount ?? "0");
-      const refundedAmount = originalPrice > 0 ? +(originalPrice - totalPrice).toFixed(2) : 0;
       const rev           = totalPrice;
-
-      // (log déjà fait dans [ORDER RAW STATUS] — pas de doublon)
 
       const country = (node.shippingAddress?.countryCode ?? "").toUpperCase();
       const items: LineBreakdown[] = (node.lineItems?.edges ?? []).map(({ node: li }) => {
@@ -282,8 +218,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
         isRefunded,
       });
     }
-    console.log(`[FINAL COUNT] orderCount=${orderCount} paidCount=${paidCount} orderBreakdowns=${orderBreakdowns.length}`);
-    return { revenue, shipping, cogsSales, salesComps, orderCount, paidCount, orderBreakdowns, scopeError: false, order1001 };
+    return { revenue, shipping, cogsSales, salesComps, orderCount, paidCount, orderBreakdowns, scopeError: false };
   } catch (err) {
     console.error(`[Dashboard] fetchShopifyOrders error (${shop}):`, err);
     return zero;
@@ -304,7 +239,6 @@ const EXPENSE_DEFAULTS = [
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
-  console.log("[DEBUG] loader start — shop:", session.shop);
   const [shopify, creators, produitsOfferts, rawExpenses] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
     safeGet(() => prisma.creator.findMany({ orderBy: { createdAt: "asc" } }), [] as Array<{
@@ -328,8 +262,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     await prisma.expense.createMany({ data: EXPENSE_DEFAULTS.map(e => ({ date, ...e })) });
     expenses = await prisma.expense.findMany({ orderBy: { date: "desc" } });
   }
-
-  console.log("[DEBUG] expenses:", JSON.stringify(expenses));
 
   // ── UGC / Creator → composants + coûts ──────────────────────────────────────
   let ugcComps: Comps = { ...ZERO };
@@ -414,11 +346,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const stockRestantValeur = stock.pots.restant * COUT.pot + stock.fouets.restant * COUT.fouet + stock.bols.restant * COUT.bol;
   const stockMortValeur    = stock.cuilleres.restant * COUT.cuillere;
 
-  console.log(`[Loader] ✅ ${shopify.orderBreakdowns.length} commandes envoyées au frontend :`);
-  shopify.orderBreakdowns.forEach(o =>
-    console.log(`  ${o.name} | isRefunded=${o.isRefunded} | items=${o.items.length} | revenue=${o.revenue} | status="${o.displayFinancialStatus}"`)
-  );
-
   return {
     ca, nbCommandes, panierMoyen,
     cogsSales, ugcCogs, cogsGifts, cogsTotal, livraison, ugcShipping, coutsVariables,
@@ -431,22 +358,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     creators,
     orderBreakdowns: shopify.orderBreakdowns,
     scopeError: shopify.scopeError,
-    _debug: {
-      shop: session.shop,
-      ordersReceived: shopify.orderBreakdowns.length,
-      ordersInTotals: shopify.orderCount,
-      orderNames: shopify.orderBreakdowns.map(o => o.name),
-      order1001: shopify.order1001,
-      chargesTotal: totalExpensesNonAds,
-      chargesSource: rawExpenses.length > 0 ? "DB" : "auto-seeded",
-      chargesList: expenses
-        .filter(e => e.category !== "Publicité Meta")
-        .map(e => `${e.label} ${e.amount}€`),
-      ca,
-      coutsVariables,
-      coutsFixes: totalExpensesNonAds,
-      resultatBusiness,
-    },
   };
 };
 
@@ -537,12 +448,6 @@ const HR = () => <hr style={{ border: "none", borderTop: `1px solid ${T.border}`
 export default function Dashboard() {
   const d = useLoaderData<typeof loader>();
 
-  // Log au render — visible si React s'hydrate côté client
-  console.log(`[Dashboard] render client — ${d.orderBreakdowns.length} commandes`);
-  d.orderBreakdowns.forEach(o =>
-    console.log(`  ${o.name} | isRefunded=${o.isRefunded} | items=${o.items.length} | revenue=${o.revenue}`)
-  );
-
   const businessAlert: "green" | "orange" | "red" = d.resultatBusiness < 0 ? "red" : d.margeBusiness < 10 ? "orange" : "green";
   const globalAlert: "green" | "orange" | "red"   = d.resultatGlobal < 0 ? "red" : d.margeGlobale < 10 ? "orange" : "green";
 
@@ -551,18 +456,6 @@ export default function Dashboard() {
       <style>{CSS}</style>
       <div className="dw" style={{ minHeight: "100vh", background: T.bg, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
         <div style={{ maxWidth: 980, margin: "0 auto" }}>
-
-          {/* ── DEBUG TEMPORAIRE ── */}
-          <div style={{ background: "#1e293b", color: "#e2e8f0", borderRadius: 10, padding: "14px 18px", marginBottom: 20, fontSize: 12, fontFamily: "monospace", lineHeight: 1.8 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, color: "#7dd3fc", marginBottom: 8 }}>🔍 DEBUG</div>
-            <div><b style={{ color: "#94a3b8" }}>shop</b> {d._debug.shop}</div>
-            <div><b style={{ color: "#94a3b8" }}>orders reçues</b> {d._debug.ordersReceived} &nbsp;|&nbsp; <b style={{ color: "#94a3b8" }}>dans les totaux</b> {d._debug.ordersInTotals}</div>
-            <div><b style={{ color: "#94a3b8" }}>noms</b> {d._debug.orderNames.join(", ") || "—"}</div>
-            <div><b style={{ color: "#94a3b8" }}>#1001</b> {d._debug.order1001}</div>
-            <div><b style={{ color: "#94a3b8" }}>charges source</b> {d._debug.chargesSource} &nbsp;|&nbsp; <b style={{ color: "#94a3b8" }}>total</b> {d._debug.chargesTotal.toFixed(2)} €</div>
-            <div><b style={{ color: "#94a3b8" }}>charges</b> {d._debug.chargesList.join(" | ")}</div>
-            <div><b style={{ color: "#94a3b8" }}>CA</b> {d._debug.ca.toFixed(2)} € &nbsp;|&nbsp; <b style={{ color: "#94a3b8" }}>coûts variables</b> {d._debug.coutsVariables.toFixed(2)} € &nbsp;|&nbsp; <b style={{ color: "#94a3b8" }}>coûts fixes</b> {d._debug.coutsFixes.toFixed(2)} € &nbsp;|&nbsp; <b style={{ color: "#94a3b8" }}>résultat</b> {d._debug.resultatBusiness.toFixed(2)} €</div>
-          </div>
 
           {d.scopeError && (
             <div style={{ background: T.orangeBg, border: `1px solid ${T.orange}`, borderRadius: 10, padding: "12px 16px", marginBottom: 24, fontSize: 13, color: "#92400e" }}>
