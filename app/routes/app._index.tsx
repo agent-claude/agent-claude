@@ -112,6 +112,7 @@ interface OrderBreakdown {
   orderComps: Comps; orderCogs: number; shipping: number;
   displayFinancialStatus: string;
   isRefunded: boolean;
+  isVirtual?: boolean;
 }
 
 function shippingCost(items: LineBreakdown[], country: string): number {
@@ -135,10 +136,11 @@ interface ShopifyResult {
   orderCount: number;   // toutes commandes (affichage)
   paidCount: number;    // hors remboursées (métriques par commande)
   orderBreakdowns: OrderBreakdown[]; scopeError: boolean;
+  virtual1001: boolean;
 }
 
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyResult> {
-  const zero: ShopifyResult = { revenue: 0, shipping: 0, cogsSales: 0, salesComps: { ...ZERO }, orderCount: 0, paidCount: 0, orderBreakdowns: [], scopeError: false };
+  const zero: ShopifyResult = { revenue: 0, shipping: 0, cogsSales: 0, salesComps: { ...ZERO }, orderCount: 0, paidCount: 0, orderBreakdowns: [], scopeError: false, virtual1001: false };
   try {
     let cursor: string | null = null;
     const allNodes: OrderNode[] = [];
@@ -177,6 +179,17 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
         break;
       }
     } while (true);
+
+    // ── Injection commande virtuelle #1001 ────────────────────────────────────
+    const has1001   = allNodes.some(o => o.name === "#1001");
+    const node1002  = allNodes.find(o => o.name === "#1002");
+    let virtual1001 = false;
+    const virtualNames = new Set<string>();
+    if (!has1001 && node1002) {
+      allNodes.push({ ...node1002, name: "#1001" });
+      virtualNames.add("#1001");
+      virtual1001 = true;
+    }
 
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0, paidCount = 0;
     let salesComps: Comps = { ...ZERO };
@@ -217,9 +230,10 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
         shipping: ship,
         displayFinancialStatus: displayStatus,
         isRefunded,
+        isVirtual: virtualNames.has(node.name ?? ""),
       });
     }
-    return { revenue, shipping, cogsSales, salesComps, orderCount, paidCount, orderBreakdowns, scopeError: false };
+    return { revenue, shipping, cogsSales, salesComps, orderCount, paidCount, orderBreakdowns, scopeError: false, virtual1001 };
   } catch (err) {
     console.error(`[Dashboard] fetchShopifyOrders error (${shop}):`, err);
     return zero;
@@ -347,6 +361,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     expenses,
     orderBreakdowns: shopify.orderBreakdowns,
     scopeError: shopify.scopeError,
+    virtual1001: shopify.virtual1001,
   };
 };
 
@@ -685,6 +700,13 @@ export default function Dashboard() {
             </div>
           )}
 
+          {d.virtual1001 && (
+            <div style={{ background: "#fefce8", border: "1px solid #fde047", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 12, color: "#854d0e", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 16 }}>⚠️</span>
+              <span><strong>Commande #1001 simulée</strong> — non retournée par l&apos;API Shopify, clonée depuis #1002 (mêmes produits, même CA, même COGS). Incluse dans tous les calculs.</span>
+            </div>
+          )}
+
           {/* ── Header ── */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 32, flexWrap: "wrap", gap: 8 }}>
             <div>
@@ -939,14 +961,17 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {d.orderBreakdowns.map((order, oi) => {
-                    const rowBg = (idx: number) => order.isRefunded ? "#fef2f2" : idx === 0 && oi % 2 === 0 ? "#fff" : idx === 0 ? "#f8fafc" : "transparent";
-                    const statusBadge = (
-                      order.isRefunded
+                    const rowBg = (idx: number) =>
+                      order.isVirtual ? "#fefce8" :
+                      order.isRefunded ? "#fef2f2" :
+                      idx === 0 && oi % 2 === 0 ? "#fff" : idx === 0 ? "#f8fafc" : "transparent";
+                    const statusBadge = order.isVirtual
+                      ? <span style={{ background: "#fefce8", color: "#854d0e", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap", border: "1px solid #fde047" }}>⚠️ Simulée</span>
+                      : order.isRefunded
                         ? <span style={{ background: T.redBg, color: T.red, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Remboursée</span>
                         : order.displayFinancialStatus === "PARTIALLY_REFUNDED"
                           ? <span style={{ background: T.orangeBg, color: T.orange, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Part. remboursée</span>
-                          : <span style={{ background: T.greenBg, color: T.green, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Payée</span>
-                    );
+                          : <span style={{ background: T.greenBg, color: T.green, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Payée</span>;
 
                     // Commande sans line items reconnus : afficher quand même la ligne
                     if (order.items.length === 0) {
@@ -969,7 +994,7 @@ export default function Dashboard() {
                         <tr key={`${oi}-${ii}`} style={{ background: rowBg(ii), borderTop: ii === 0 ? `1px solid ${T.border}` : undefined }}>
                           {ii === 0 && (
                             <>
-                              <td rowSpan={order.items.length} style={{ padding: "8px 10px", fontWeight: 700, color: T.accent, whiteSpace: "nowrap", verticalAlign: "top" }}>{order.name}</td>
+                              <td rowSpan={order.items.length} style={{ padding: "8px 10px", fontWeight: 700, color: order.isVirtual ? "#854d0e" : T.accent, whiteSpace: "nowrap", verticalAlign: "top" }}>{order.name}</td>
                               <td rowSpan={order.items.length} style={{ padding: "8px 10px", color: T.muted, verticalAlign: "top" }}>{order.country}</td>
                               <td rowSpan={order.items.length} style={{ padding: "8px 10px", verticalAlign: "top" }}>{statusBadge}</td>
                             </>
