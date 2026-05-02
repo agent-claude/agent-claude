@@ -144,10 +144,20 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
     do {
       const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor } });
-      const data = (await res.json()) as {
+      const rawText = await res.text();
+      const preview = rawText.length > 800 ? rawText.slice(0, 800) + "…" : rawText;
+      console.log(`[DEBUG] GraphQL raw response (page cursor=${cursor ?? "null"}, status=${res.status}):`, preview);
+
+      let data: {
         data?: { orders?: { pageInfo: { hasNextPage: boolean; endCursor: string }; edges: { node: OrderNode }[] } };
-        errors?: { message?: string }[];
+        errors?: { message?: string; extensions?: unknown }[];
       };
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        console.error(`[Dashboard] JSON parse error (${shop}):`, e);
+        break;
+      }
 
       if (data.errors?.length) {
         console.error(`[Dashboard] GraphQL error (${shop}):`, JSON.stringify(data.errors));
@@ -155,7 +165,10 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       }
 
       const page = data.data?.orders;
-      if (!page) break;
+      if (!page) {
+        console.warn(`[Dashboard] data.data.orders est null/undefined — raw keys: ${Object.keys(data.data ?? {}).join(",") || "aucun"}`);
+        break;
+      }
 
       for (const { node } of page.edges) allNodes.push(node);
 
