@@ -7,7 +7,7 @@ import {
   parseUgcProduit, compsToKey, keyToComps, coutComps, coutFromKey,
   ugcShippingFromKey, ugcShippingFromText,
   PRODUIT_LABELS, TYPE_LABELS, PAYS_LABELS,
-  SHIPPING_STATUTS, SHIPPING_STATUTS_ACTIFS, SHIPPING_LABELS, shippingStyle,
+  SHIPPING_STATUTS_ACTIFS, SHIPPING_LABELS, shippingStyle,
   CONTENT_STATUTS, CONTENT_LABELS, contentStyle,
   normShippingStatus,
   eur, fmtComps,
@@ -686,7 +686,7 @@ export default function UGCPage() {
               </label>
               <label style={lbl}><span style={lbT}>Statut colis</span>
                 <select name="shippingStatus" defaultValue="en_attente" style={inp}>
-                  {SHIPPING_STATUTS.map(s => <option key={s} value={s}>{SHIPPING_LABELS[s]}</option>)}
+                  {SHIPPING_STATUTS_ACTIFS.map(s => <option key={s} value={s}>{SHIPPING_LABELS[s]}</option>)}
                 </select>
               </label>
               <label style={lbl}><span style={lbT}>Frais port (auto si vide)</span>

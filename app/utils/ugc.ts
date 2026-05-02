@@ -202,10 +202,8 @@ export const PAYS_LABELS: Record<string, string> = {
 
 // ─── Statut colis (shippingStatus) ───────────────────────────────────────────
 
-export const SHIPPING_STATUTS = ["en_attente", "preparation", "envoye", "livre", "refuse"] as const;
-export type ShippingStatus = typeof SHIPPING_STATUTS[number];
+export type ShippingStatus = "en_attente" | "preparation" | "envoye" | "livre" | "refuse";
 
-// Statuts utilisés dans le dropdown (refuse géré via bouton dédié)
 export const SHIPPING_STATUTS_ACTIFS = ["en_attente", "preparation", "envoye", "livre"] as const;
 
 export const SHIPPING_LABELS: Record<string, string> = {
