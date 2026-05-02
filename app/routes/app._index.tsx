@@ -258,7 +258,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     safeGet(() => prisma.produitOffert.findMany({ orderBy: { date: "desc" } }),
       [] as Array<{ produit: string; quantite: number; coutTotal: number }>),
     safeGet(() => prisma.expense.findMany({ orderBy: { date: "desc" } }),
-      [] as Array<{ id: string; date: Date; category: string; label: string; amount: number; type: string; note: string | null }>),
+      [] as Array<{ id: string; date: Date; category: string; label: string; amount: number; type: string; note: string | null; caGenere: number }>),
   ]);
 
   const expenses = rawExpenses;
@@ -294,11 +294,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // ── Dépenses depuis DB ───────────────────────────────────────────────────────
-  const adsBudget           = expenses.filter(e => e.category === "Meta Ads" || e.category === "Publicité Meta").reduce((s, e) => s + e.amount, 0);
+  const adsBudget           = expenses.filter(e => isAdsCategory(e.category)).reduce((s, e) => s + e.amount, 0);
+  const caGenereAds         = expenses.filter(e => isAdsCategory(e.category)).reduce((s, e) => s + (e.caGenere ?? 0), 0);
   const totalExpenses       = expenses.reduce((s, e) => s + e.amount, 0);
   const totalExpensesNonAds = totalExpenses - adsBudget;
   const expensesByCategory  = Object.entries(
-    expenses.filter(e => e.category !== "Meta Ads" && e.category !== "Publicité Meta").reduce((acc, e) => {
+    expenses.filter(e => !isAdsCategory(e.category)).reduce((acc, e) => {
       acc[e.category] = (acc[e.category] ?? 0) + e.amount;
       return acc;
     }, {} as Record<string, number>)
@@ -325,8 +326,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const margeVarParCmd = paidCount > 0 ? resultatBusiness / paidCount : 0;
   const seuilAds       = margeVarParCmd > 0 && adsBudget > 0 ? Math.ceil(adsBudget / margeVarParCmd) : 0;
-  const roas           = adsBudget > 0 ? ca / adsBudget : 0;
-  const profitAds      = ca - adsBudget;
+  const roas           = adsBudget > 0 ? caGenereAds / adsBudget : 0;
+  const profitAds      = caGenereAds - adsBudget;
 
   // ── Stock par composant (ventes + UGC + autres offerts) ───────────────────────
   type StockStat = { init: number; vendus: number; offerts: number; total: number; restant: number; pct: number; };
@@ -351,7 +352,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     ca, nbCommandes, panierMoyen,
     cogsSales, ugcCogs, cogsGifts, cogsTotal, livraison, ugcShipping, coutsVariables,
-    expensesByCategory, totalExpensesNonAds, adsBudget, roas, profitAds, seuilAds,
+    expensesByCategory, totalExpensesNonAds, adsBudget, caGenereAds, roas, profitAds, seuilAds,
     totalHorsAds, resultatBusiness, margeBusiness,
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
     stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
@@ -372,31 +373,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
   const intent = form.get("intent") as string;
 
-  console.log(`[Action] intent=${intent}`, Object.fromEntries(form.entries()));
-
   if (intent === "expense_create") {
+    const cat = form.get("category") as string;
     await prisma.expense.create({
       data: {
         label:    form.get("label") as string,
         amount:   parseFloat(form.get("amount") as string),
-        category: form.get("category") as string,
+        category: cat,
         date:     new Date(form.get("date") as string),
         type:     "ponctuelle",
         note:     (form.get("note") as string) || null,
+        caGenere: isAdsCategory(cat) ? parseFloat((form.get("caGenere") as string) || "0") : 0,
       },
     });
     return { ok: true };
   }
 
   if (intent === "expense_update") {
+    const cat = form.get("category") as string;
     await prisma.expense.update({
       where: { id: form.get("id") as string },
       data: {
         label:    form.get("label") as string,
         amount:   parseFloat(form.get("amount") as string),
-        category: form.get("category") as string,
+        category: cat,
         date:     new Date(form.get("date") as string),
         note:     (form.get("note") as string) || null,
+        caGenere: isAdsCategory(cat) ? parseFloat((form.get("caGenere") as string) || "0") : 0,
       },
     });
     return { ok: true };
@@ -499,9 +502,9 @@ const EXPENSE_CATEGORIES = [
   "Meta Ads", "UGC / Influence", "Transport", "Logistique", "Marketing", "Autre",
 ] as const;
 
-const isAdsCategory = (c: string) => c === "Meta Ads" || c === "Publicité Meta";
+const isAdsCategory = (c: string) => c.toLowerCase().includes("ads");
 
-type ExpenseRow = { id: string; date: Date | string; category: string; label: string; amount: number; type: string; note: string | null };
+type ExpenseRow = { id: string; date: Date | string; category: string; label: string; amount: number; type: string; note: string | null; caGenere: number };
 
 const inputSt: React.CSSProperties = {
   border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 10px", fontSize: 13,
@@ -521,29 +524,40 @@ const btnDanger: React.CSSProperties = {
 };
 
 function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
-  const fetcher    = useFetcher<{ ok: boolean }>();
-  const lastIntent = useRef("");
-  const [showAdd, setShowAdd] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const fetcher          = useFetcher<{ ok: boolean }>();
+  const lastIntent       = useRef("");
+  const prevFetcherState = useRef(fetcher.state);
+  const [showAdd, setShowAdd]               = useState(false);
+  const [editingId, setEditingId]           = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [toast, setToast]                   = useState<string | null>(null);
+  const [formCategory, setFormCategory]     = useState<string>("Autre");
 
-  // Close form + show toast after successful submit
+  // Detect transition non-idle → idle (avoids spurious fires)
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.ok) {
+    const prev = prevFetcherState.current;
+    prevFetcherState.current = fetcher.state;
+    if (prev !== "idle" && fetcher.state === "idle" && fetcher.data?.ok) {
       setShowAdd(false);
       setEditingId(null);
+      setConfirmDeleteId(null);
       const intent = lastIntent.current;
-      if (intent === "expense_create") setToast("Charge ajoutée ✅");
+      if (intent === "expense_create")      setToast("Charge ajoutée ✅");
       else if (intent === "expense_update") setToast("Charge modifiée ✅");
       else if (intent === "expense_delete") setToast("Charge supprimée ✅");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.state, fetcher.data]);
+
+  // Sync category state when editing expense changes
+  useEffect(() => {
+    const editingExpense = editingId ? expenses.find(e => e.id === editingId) : undefined;
+    setFormCategory(editingExpense?.category ?? "Autre");
+  }, [editingId, expenses]);
 
   // Auto-dismiss toast
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 3000);
+    const t = setTimeout(() => setToast(null), 3500);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -551,6 +565,7 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
   const formExpense    = showAdd ? undefined : editingExpense;
   const showForm       = showAdd || !!editingId;
   const busy           = fetcher.state !== "idle";
+  const isAdsForm      = isAdsCategory(formCategory);
 
   const defaultDate = formExpense
     ? new Date(formExpense.date).toISOString().split("T")[0]
@@ -591,17 +606,21 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
 
       {/* ── Formulaire (hors table — évite le bug form-inside-table) ── */}
       {showForm && (
-        <fetcher.Form method="post" onSubmit={() => { lastIntent.current = formExpense ? "expense_update" : "expense_create"; }}>
+        <fetcher.Form
+          key={editingId ?? "add"}
+          method="post"
+          onSubmit={() => { lastIntent.current = formExpense ? "expense_update" : "expense_create"; }}
+        >
           <input type="hidden" name="intent" value={formExpense ? "expense_update" : "expense_create"} />
           {formExpense && <input type="hidden" name="id" value={formExpense.id} />}
-          <div style={{ padding: "14px 16px", background: "#eef2ff", borderBottom: `1px solid ${T.border}`, display: "grid", gridTemplateColumns: "1fr 160px 130px 110px auto", gap: 8, alignItems: "end" }}>
+          <div style={{ padding: "14px 16px", background: "#eef2ff", borderBottom: `1px solid ${T.border}`, display: "grid", gridTemplateColumns: `1fr 160px 130px 110px${isAdsForm ? " 110px" : ""} auto`, gap: 8, alignItems: "end" }}>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Intitulé</label>
               <input name="label" defaultValue={formExpense?.label} placeholder="ex : Cartons d'expédition" required style={inputSt} />
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Catégorie</label>
-              <select name="category" defaultValue={formExpense?.category ?? "Autre"} style={inputSt}>
+              <select name="category" value={formCategory} onChange={e => setFormCategory(e.target.value)} style={inputSt}>
                 {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
@@ -610,9 +629,15 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
               <input name="date" type="date" defaultValue={defaultDate} required style={inputSt} />
             </div>
             <div>
-              <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Montant (€)</label>
+              <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Budget (€)</label>
               <input name="amount" type="number" step="0.01" min="0" defaultValue={formExpense?.amount} placeholder="0.00" required style={{ ...inputSt, textAlign: "right" }} />
             </div>
+            {isAdsForm && (
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: T.orange, display: "block", marginBottom: 4 }}>CA attribué (€)</label>
+                <input name="caGenere" type="number" step="0.01" min="0" defaultValue={formExpense?.caGenere ?? 0} placeholder="0.00" style={{ ...inputSt, textAlign: "right", borderColor: T.orangeBdr }} />
+              </div>
+            )}
             <div style={{ display: "flex", gap: 6, paddingBottom: 1 }}>
               <button type="submit" disabled={busy} style={btnPri}>{busy ? "…" : formExpense ? "Sauver" : "Ajouter"}</button>
               <button type="button" onClick={() => { setShowAdd(false); setEditingId(null); }} style={btnSec}>✕</button>
@@ -654,22 +679,28 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
                 </td>
                 <td style={{ padding: "9px 8px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</td>
                 <td style={{ padding: "9px 14px" }}>
-                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                    <button
-                      onClick={() => { setEditingId(e.id); setShowAdd(false); }}
-                      style={{ ...btnSec, opacity: editingId === e.id ? 0.5 : 1 }}
-                      disabled={editingId === e.id}
-                    >✏️</button>
-                    <button
-                      onClick={() => {
-                        if (confirm(`Supprimer « ${e.label} » ?`)) {
-                          lastIntent.current = "expense_delete";
-                          fetcher.submit({ intent: "expense_delete", id: e.id }, { method: "post" });
-                        }
-                      }}
-                      style={btnDanger}
-                    >🗑</button>
-                  </div>
+                  {confirmDeleteId === e.id ? (
+                    <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}>
+                      <span style={{ fontSize: 11, color: T.red, fontWeight: 600, whiteSpace: "nowrap" }}>Supprimer ?</span>
+                      <button
+                        onClick={() => { lastIntent.current = "expense_delete"; fetcher.submit({ intent: "expense_delete", id: e.id }, { method: "post" }); }}
+                        style={{ ...btnDanger, padding: "3px 9px", fontSize: 11 }}
+                      >Oui</button>
+                      <button onClick={() => setConfirmDeleteId(null)} style={{ ...btnSec, padding: "3px 9px", fontSize: 11 }}>Non</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button
+                        onClick={() => { setEditingId(e.id); setShowAdd(false); setConfirmDeleteId(null); }}
+                        style={{ ...btnSec, opacity: editingId === e.id ? 0.5 : 1 }}
+                        disabled={editingId === e.id}
+                      >✏️</button>
+                      <button
+                        onClick={() => { setConfirmDeleteId(e.id); setEditingId(null); setShowAdd(false); }}
+                        style={btnDanger}
+                      >🗑</button>
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}
@@ -814,22 +845,26 @@ export default function Dashboard() {
               </div>
             ) : (
               <>
-                <div className="g3" style={{ marginBottom: 14 }}>
+                <div className="g4" style={{ marginBottom: 14 }}>
                   {/* Budget */}
-                  <HCard label="Budget Meta Ads" value={d.adsBudget} forceColor="red"
+                  <HCard label="Budget dépensé" value={d.adsBudget} forceColor="red"
                     sub={`${d.expenses.filter(e => isAdsCategory(e.category)).length} campagne${d.expenses.filter(e => isAdsCategory(e.category)).length > 1 ? "s" : ""}`} />
+
+                  {/* CA généré */}
+                  <HCard label="CA généré" value={d.caGenereAds} forceColor={d.caGenereAds > 0 ? "green" : "red"}
+                    sub="CA attribué aux campagnes" />
 
                   {/* ROAS */}
                   {(() => {
                     const roasColor = d.roas >= 3 ? T.green : d.roas >= 1 ? T.orange : T.red;
                     const roasBg    = d.roas >= 3 ? T.greenBg : d.roas >= 1 ? T.orangeBg : T.redBg;
                     const roasBdr   = d.roas >= 3 ? T.greenBdr : d.roas >= 1 ? T.orangeBdr : T.redBdr;
-                    const roasLabel = d.roas >= 3 ? "Bon ROAS" : d.roas >= 1 ? "ROAS faible" : "ROAS négatif";
+                    const roasLabel = d.roas >= 3 ? "Bon ROAS" : d.roas >= 1 ? "ROAS faible" : "ROAS nul";
                     return (
                       <div style={{ background: roasBg, border: `2px solid ${roasBdr}`, borderRadius: 18, padding: "20px 20px 18px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                         <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: roasColor, opacity: 0.75 }}>ROAS réel</span>
                         <span className="hv" style={{ fontWeight: 800, lineHeight: 1.1, color: roasColor, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>×{d.roas.toFixed(2)}</span>
-                        <span style={{ fontSize: 13, color: roasColor, opacity: 0.75 }}>{roasLabel} · {eur(d.ca)} CA / {eur(d.adsBudget)} dépensés</span>
+                        <span style={{ fontSize: 13, color: roasColor, opacity: 0.75 }}>{roasLabel} · {eur(d.caGenereAds)} CA / {eur(d.adsBudget)} dépensés</span>
                       </div>
                     );
                   })()}
@@ -838,7 +873,7 @@ export default function Dashboard() {
                   <HCard
                     label={d.profitAds >= 0 ? "Profit ads net" : "Perte ads nette"}
                     value={d.profitAds}
-                    sub={`CA ${eur(d.ca)} − budget ${eur(d.adsBudget)}`}
+                    sub={`CA ${eur(d.caGenereAds)} − budget ${eur(d.adsBudget)}`}
                   />
                 </div>
 
