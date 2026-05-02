@@ -84,7 +84,8 @@ const ORDERS_QUERY = `
         node {
           id name
           displayFinancialStatus
-          currentTotalPriceSet { shopMoney { amount } }
+          currentTotalPriceSet  { shopMoney { amount } }
+          originalTotalPriceSet { shopMoney { amount } }
           shippingAddress { countryCode }
           lineItems(first: 10) {
             edges { node { title quantity } }
@@ -98,7 +99,8 @@ const ORDERS_QUERY = `
 interface OrderNode {
   id?: string; name?: string;
   displayFinancialStatus?: string;
-  currentTotalPriceSet?: { shopMoney?: { amount?: string } };
+  currentTotalPriceSet?:  { shopMoney?: { amount?: string } };
+  originalTotalPriceSet?: { shopMoney?: { amount?: string } };
   shippingAddress?: { countryCode?: string };
   lineItems?: { edges: { node: { title?: string; quantity?: number } }[] };
 }
@@ -180,7 +182,12 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
     } while (true);
 
     console.log("[DEBUG] orders count:", allNodes.length);
-    console.log("[DEBUG] order names:", allNodes.map(n => n.name));
+    console.log("[ORDERS RAW NAMES]", allNodes.map(o => ({
+      name: o.name,
+      displayFinancialStatus: o.displayFinancialStatus,
+      currentTotalPrice: o.currentTotalPriceSet?.shopMoney?.amount,
+      originalTotalPrice: o.originalTotalPriceSet?.shopMoney?.amount,
+    })));
 
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0;
     let salesComps: Comps = { ...ZERO };
@@ -188,11 +195,10 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
     for (const node of allNodes) {
       const displayStatus = (node.displayFinancialStatus ?? "").toUpperCase();
-      const isRefunded    = displayStatus === "REFUNDED" || displayStatus === "PARTIALLY_REFUNDED";
-      // currentTotalPriceSet reflects post-refund amount — already 0 for fully refunded
+      // isRefunded = UNIQUEMENT remboursement total — PARTIALLY_REFUNDED est une vente normale
+      const isRefunded = displayStatus === "REFUNDED";
+      // Pour les remboursés totaux : rev = 0. Sinon Shopify donne déjà le montant net.
       const rev = isRefunded ? 0 : parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
-
-      console.log(`[Order ${node.name ?? "?"}] status=${displayStatus} isRefunded=${isRefunded} rev=${rev}`);
       const country = (node.shippingAddress?.countryCode ?? "").toUpperCase();
       const items: LineBreakdown[] = (node.lineItems?.edges ?? []).map(({ node: li }) => {
         const comps    = titleToComps(li.title ?? "", li.quantity ?? 1);
