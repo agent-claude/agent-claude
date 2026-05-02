@@ -280,11 +280,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // ── Dépenses depuis DB ───────────────────────────────────────────────────────
-  const adsBudget           = expenses.filter(e => e.category === "Publicité Meta").reduce((s, e) => s + e.amount, 0);
+  const adsBudget           = expenses.filter(e => e.category === "Meta Ads" || e.category === "Publicité Meta").reduce((s, e) => s + e.amount, 0);
   const totalExpenses       = expenses.reduce((s, e) => s + e.amount, 0);
   const totalExpensesNonAds = totalExpenses - adsBudget;
   const expensesByCategory  = Object.entries(
-    expenses.filter(e => e.category !== "Publicité Meta").reduce((acc, e) => {
+    expenses.filter(e => e.category !== "Meta Ads" && e.category !== "Publicité Meta").reduce((acc, e) => {
       acc[e.category] = (acc[e.category] ?? 0) + e.amount;
       return acc;
     }, {} as Record<string, number>)
@@ -311,6 +311,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const margeVarParCmd = paidCount > 0 ? resultatBusiness / paidCount : 0;
   const seuilAds       = margeVarParCmd > 0 && adsBudget > 0 ? Math.ceil(adsBudget / margeVarParCmd) : 0;
+  const roas           = adsBudget > 0 ? ca / adsBudget : 0;
+  const profitAds      = ca - adsBudget;
 
   // ── Stock par composant (ventes + UGC + autres offerts) ───────────────────────
   type StockStat = { init: number; vendus: number; offerts: number; total: number; restant: number; pct: number; };
@@ -335,7 +337,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     ca, nbCommandes, panierMoyen,
     cogsSales, ugcCogs, cogsGifts, cogsTotal, livraison, ugcShipping, coutsVariables,
-    expensesByCategory, totalExpensesNonAds, adsBudget, seuilAds,
+    expensesByCategory, totalExpensesNonAds, adsBudget, roas, profitAds, seuilAds,
     totalHorsAds, resultatBusiness, margeBusiness,
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
     stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
@@ -477,8 +479,10 @@ const HR = () => <hr style={{ border: "none", borderTop: `1px solid ${T.border}`
 
 const EXPENSE_CATEGORIES = [
   "Packaging", "Shopify", "Graphiste", "Événements",
-  "Publicité Meta", "UGC / Influence", "Transport", "Logistique", "Marketing", "Autre",
+  "Meta Ads", "UGC / Influence", "Transport", "Logistique", "Marketing", "Autre",
 ] as const;
+
+const isAdsCategory = (c: string) => c === "Meta Ads" || c === "Publicité Meta";
 
 type ExpenseRow = { id: string; date: Date | string; category: string; label: string; amount: number; type: string; note: string | null };
 
@@ -602,10 +606,10 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
               editingId === e.id ? (
                 <ExpenseForm key={e.id} expense={e} onCancel={() => setEditingId(null)} fetcher={fetcher} />
               ) : (
-                <tr key={e.id} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined, background: e.category === "Publicité Meta" ? "#fffbeb" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                <tr key={e.id} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined, background: isAdsCategory(e.category) ? "#fffbeb" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
                   <td style={{ padding: "9px 14px", fontWeight: 500, color: T.text }}>{e.label}</td>
                   <td style={{ padding: "9px 8px" }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: e.category === "Publicité Meta" ? T.orangeBg : "#f1f5f9", color: e.category === "Publicité Meta" ? T.orange : T.muted }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: isAdsCategory(e.category) ? T.orangeBg : "#f1f5f9", color: isAdsCategory(e.category) ? T.orange : T.muted }}>
                       {e.category}
                     </span>
                   </td>
@@ -643,9 +647,9 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
             {byCategory.map(([cat, tot]) => (
               <span key={cat} style={{
                 fontSize: 12, fontWeight: 600, padding: "4px 12px", borderRadius: 99,
-                background: cat === "Publicité Meta" ? T.orangeBg : T.redBg,
-                color: cat === "Publicité Meta" ? T.orange : T.red,
-                border: `1px solid ${cat === "Publicité Meta" ? T.orangeBdr : T.redBdr}`,
+                background: isAdsCategory(cat) ? T.orangeBg : T.redBg,
+                color: isAdsCategory(cat) ? T.orange : T.red,
+                border: `1px solid ${isAdsCategory(cat) ? T.orangeBdr : T.redBdr}`,
               }}>
                 {cat} · {eur(tot)}
               </span>
@@ -751,33 +755,58 @@ export default function Dashboard() {
 
           {/* ══ BLOC 2 — ADS ══════════════════════════════════════════════════ */}
           <section style={{ marginBottom: 48 }}>
-            <SectionLabel accent={T.red}>Marketing Ads — Meta</SectionLabel>
+            <SectionLabel accent={T.orange}>Marketing Ads — Meta</SectionLabel>
 
-            <div className="g3" style={{ marginBottom: 14 }}>
-              <HCard label="Budget dépensé" value={d.adsBudget} forceColor="red"
-                sub={d.adsBudget > 0 ? "Catégorie : Publicité Meta" : "Aucune dépense pub enregistrée"} />
-              <div style={{ background: T.orangeBg, border: `2px solid ${T.orangeBdr}`, borderRadius: 18, padding: "20px 20px 18px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: T.orange, opacity: 0.75 }}>ROAS réel</span>
-                {d.adsBudget === 0 ? (
-                  <span style={{ fontSize: 13, color: T.orange, fontWeight: 600 }}>→ Ajouter catégorie « Publicité Meta » ci-dessus</span>
-                ) : (
-                  <>
-                    <span className="hv" style={{ fontWeight: 800, color: T.orange, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>×0.00</span>
-                    <span style={{ fontSize: 13, color: T.orange, opacity: 0.75 }}>0 vente attribuée aux ads</span>
-                  </>
-                )}
+            {d.adsBudget === 0 ? (
+              <div style={{ background: T.orangeBg, border: `2px dashed ${T.orangeBdr}`, borderRadius: 16, padding: "28px 24px", textAlign: "center" }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📊</div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: T.orange, marginBottom: 6 }}>Aucune dépense Meta Ads enregistrée</div>
+                <div style={{ fontSize: 13, color: T.muted, maxWidth: 400, margin: "0 auto" }}>
+                  Ajoute une charge avec la catégorie <strong>Meta Ads</strong> dans la section Charges ci-dessus pour voir ton ROAS, ta rentabilité et ton seuil de break-even.
+                </div>
               </div>
-              <HCard label="Perte ads nette" value={-d.adsBudget} forceColor="red"
-                sub="Aucun CA généré via ads" />
-            </div>
+            ) : (
+              <>
+                <div className="g3" style={{ marginBottom: 14 }}>
+                  {/* Budget */}
+                  <HCard label="Budget Meta Ads" value={d.adsBudget} forceColor="red"
+                    sub={`${d.expenses.filter(e => isAdsCategory(e.category)).length} campagne${d.expenses.filter(e => isAdsCategory(e.category)).length > 1 ? "s" : ""}`} />
 
-            <div className="g2">
-              <MCard label="Seuil rentabilité ads" value={d.seuilAds > 0 ? `${d.seuilAds} cmd` : "—"}
-                sub={d.seuilAds > 0 ? `${Math.max(0, d.seuilAds - d.nbCommandes)} cmd supplémentaires` : undefined}
-                color={T.orange} />
-              <MCard label="Coût ads / commande" value={eur(d.adsBudget / Math.max(d.nbCommandes, 1))}
-                sub="si attribuées à toutes les commandes" color={T.red} />
-            </div>
+                  {/* ROAS */}
+                  {(() => {
+                    const roasColor = d.roas >= 3 ? T.green : d.roas >= 1 ? T.orange : T.red;
+                    const roasBg    = d.roas >= 3 ? T.greenBg : d.roas >= 1 ? T.orangeBg : T.redBg;
+                    const roasBdr   = d.roas >= 3 ? T.greenBdr : d.roas >= 1 ? T.orangeBdr : T.redBdr;
+                    const roasLabel = d.roas >= 3 ? "Bon ROAS" : d.roas >= 1 ? "ROAS faible" : "ROAS négatif";
+                    return (
+                      <div style={{ background: roasBg, border: `2px solid ${roasBdr}`, borderRadius: 18, padding: "20px 20px 18px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: roasColor, opacity: 0.75 }}>ROAS réel</span>
+                        <span className="hv" style={{ fontWeight: 800, lineHeight: 1.1, color: roasColor, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>×{d.roas.toFixed(2)}</span>
+                        <span style={{ fontSize: 13, color: roasColor, opacity: 0.75 }}>{roasLabel} · {eur(d.ca)} CA / {eur(d.adsBudget)} dépensés</span>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Résultat net ads */}
+                  <HCard
+                    label={d.profitAds >= 0 ? "Profit ads net" : "Perte ads nette"}
+                    value={d.profitAds}
+                    sub={`CA ${eur(d.ca)} − budget ${eur(d.adsBudget)}`}
+                  />
+                </div>
+
+                <div className="g3">
+                  <MCard label="Seuil rentabilité ads" value={d.seuilAds > 0 ? `${d.seuilAds} cmd` : "—"}
+                    sub={d.seuilAds > 0 ? `${Math.max(0, d.seuilAds - d.nbCommandes)} cmd supplémentaires` : undefined}
+                    color={T.orange} />
+                  <MCard label="Coût ads / commande" value={eur(d.adsBudget / Math.max(d.nbCommandes, 1))}
+                    sub="si attribuées à toutes les commandes" color={T.red} />
+                  <MCard label="Marge nette (après ads)" value={pct(d.margeGlobale)}
+                    color={d.margeGlobale < 0 ? T.red : d.margeGlobale < 10 ? T.orange : T.green}
+                    sub={`Résultat global ${eur(d.resultatGlobal)}`} />
+                </div>
+              </>
+            )}
           </section>
 
           <HR />
