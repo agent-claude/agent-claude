@@ -75,7 +75,7 @@ function produitTypeToComps(produit: string, qty: number): Comps {
 
 const ORDERS_QUERY = `
   query GetOrders($cursor: String) {
-    orders(first: 250, query: "status:any", sortKey: ORDER_NUMBER, reverse: true, after: $cursor) {
+    orders(first: 250, sortKey: ORDER_NUMBER, reverse: true, after: $cursor) {
       pageInfo {
         hasNextPage
         endCursor
