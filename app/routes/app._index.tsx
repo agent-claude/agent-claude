@@ -9,18 +9,6 @@ import { SHIPPING_LABELS, shippingStyle, CONTENT_LABELS, contentStyle } from "..
 const COUT = { pot: 3.77055, fouet: 4.1806, bol: 4.1806, cuillere: 2.40 } as const;
 const STOCK_INIT = { pots: 200, fouets: 100, bols: 100, cuilleres: 100 } as const;
 
-// Charges fixes — mise à jour manuelle
-const ADS_BUDGET = 731.59;
-const CHARGES_FIXES = [
-  { key: "cartons",    label: "Cartons d'expédition", montant: 95 },
-  { key: "flyers",     label: "Flyers",               montant: 55 },
-  { key: "graphiste",  label: "Graphiste",             montant: 100 },
-  { key: "shopify",    label: "Shopify",               montant: 66,  note: "33 €/mois × 2 (mars–avr.)" },
-  { key: "stickers",   label: "Stickers",              montant: 100 },
-  { key: "evenements", label: "Événements",            montant: 450, note: "3 × 150 € — 3 ventes" },
-] as const;
-const TOTAL_CHARGES_FIXES = CHARGES_FIXES.reduce((s, c) => s + c.montant, 0); // 866
-
 // ─── Helpers généraux ────────────────────────────────────────────────────────
 
 async function safeGet<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -86,11 +74,17 @@ function produitTypeToComps(produit: string, qty: number): Comps {
 // ─── Shopify orders ───────────────────────────────────────────────────────────
 
 const ORDERS_QUERY = `
-  query GetOrders {
-    orders(first: 50, sortKey: CREATED_AT, reverse: true) {
+  query GetOrders($cursor: String) {
+    orders(first: 250, query: "status:any", sortKey: ORDER_NUMBER, reverse: true, after: $cursor) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       edges {
         node {
           id name
+          displayFinancialStatus
+          financialStatus
           currentTotalPriceSet { shopMoney { amount } }
           shippingAddress { countryCode }
           lineItems(first: 10) {
@@ -104,6 +98,8 @@ const ORDERS_QUERY = `
 
 interface OrderNode {
   id?: string; name?: string;
+  displayFinancialStatus?: string;
+  financialStatus?: string;
   currentTotalPriceSet?: { shopMoney?: { amount?: string } };
   shippingAddress?: { countryCode?: string };
   lineItems?: { edges: { node: { title?: string; quantity?: number } }[] };
@@ -115,6 +111,8 @@ interface OrderBreakdown {
   name: string; revenue: number; country: string;
   items: LineBreakdown[];
   orderComps: Comps; orderCogs: number; shipping: number;
+  financialStatus: string;
+  isRefunded: boolean;
 }
 
 function shippingCost(items: LineBreakdown[], country: string): number {
@@ -141,24 +139,51 @@ interface ShopifyResult {
 async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<ShopifyResult> {
   const zero: ShopifyResult = { revenue: 0, shipping: 0, cogsSales: 0, salesComps: { ...ZERO }, orderCount: 0, orderBreakdowns: [], scopeError: false };
   try {
-    const res  = await admin.graphql(ORDERS_QUERY);
-    const data = (await res.json()) as {
-      data?: { orders?: { edges: { node: OrderNode }[] } };
-      errors?: { message?: string }[];
-    };
-    if (data.errors?.length) {
-      console.error(`[Dashboard] GraphQL error (${shop}):`, JSON.stringify(data.errors));
-      return { ...zero, scopeError: data.errors.some(e => e.message?.toLowerCase().includes("access denied") || e.message?.toLowerCase().includes("read_orders")) };
-    }
-    const orders = data.data?.orders;
-    if (!orders) return zero;
+    let cursor: string | null = null;
+    const allNodes: OrderNode[] = [];
+
+    do {
+      const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor } });
+      const data = (await res.json()) as {
+        data?: { orders?: { pageInfo: { hasNextPage: boolean; endCursor: string }; edges: { node: OrderNode }[] } };
+        errors?: { message?: string }[];
+      };
+
+      if (data.errors?.length) {
+        console.error(`[Dashboard] GraphQL error (${shop}):`, JSON.stringify(data.errors));
+        return { ...zero, scopeError: data.errors.some(e => e.message?.toLowerCase().includes("access denied") || e.message?.toLowerCase().includes("read_orders")) };
+      }
+
+      const page = data.data?.orders;
+      if (!page) break;
+
+      for (const { node } of page.edges) allNodes.push(node);
+
+      console.log(`[Orders] Page chargée : ${page.edges.length} commandes — hasNextPage: ${page.pageInfo.hasNextPage}`);
+
+      if (page.pageInfo.hasNextPage) {
+        cursor = page.pageInfo.endCursor;
+      } else {
+        break;
+      }
+    } while (true);
+
+    console.log(`[Orders] total = ${allNodes.length}`);
+    console.log(`[Orders] names = ${allNodes.map(n => n.name ?? "?").join(", ")}`);
 
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0;
     let salesComps: Comps = { ...ZERO };
     const orderBreakdowns: OrderBreakdown[] = [];
 
-    for (const { node } of orders.edges) {
+    for (const node of allNodes) {
+      const rawStatus     = (node.financialStatus ?? "").toUpperCase();
+      const displayStatus = node.displayFinancialStatus ?? node.financialStatus ?? "";
+      const isRefunded    = rawStatus === "REFUNDED" || (node.displayFinancialStatus ?? "").toUpperCase() === "REFUNDED";
       const rev     = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+
+      if (node.name === "#1007" || node.name === "#1001") {
+        console.log(`[Order ${node.name}] financialStatus=${node.financialStatus ?? "null"} displayFinancialStatus=${node.displayFinancialStatus ?? "null"} isRefunded=${isRefunded} revenue=${rev}`);
+      }
       const country = (node.shippingAddress?.countryCode ?? "").toUpperCase();
       const items: LineBreakdown[] = (node.lineItems?.edges ?? []).map(({ node: li }) => {
         const comps    = titleToComps(li.title ?? "", li.quantity ?? 1);
@@ -169,13 +194,24 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       const orderCogs  = cogs(orderComps);
       const ship       = shippingCost(items, country);
 
-      revenue    += rev;
-      shipping   += ship;
-      cogsSales  += orderCogs;
-      salesComps  = add(salesComps, orderComps);
-      orderCount++;
+      if (!isRefunded) {
+        revenue    += rev;
+        shipping   += ship;
+        cogsSales  += orderCogs;
+        salesComps  = add(salesComps, orderComps);
+        orderCount++;
+      }
 
-      orderBreakdowns.push({ name: node.name ?? `#${orderCount}`, revenue: rev, country: country || "?", items, orderComps, orderCogs, shipping: ship });
+      orderBreakdowns.push({
+        name: node.name ?? "#?",
+        revenue: isRefunded ? 0 : rev,
+        country: country || "?",
+        items,
+        orderComps, orderCogs,
+        shipping: ship,
+        financialStatus: displayStatus,
+        isRefunded,
+      });
     }
     return { revenue, shipping, cogsSales, salesComps, orderCount, orderBreakdowns, scopeError: false };
   } catch (err) {
@@ -189,7 +225,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
-  const [shopify, creators, produitsOfferts] = await Promise.all([
+  const [shopify, creators, produitsOfferts, expenses] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
     safeGet(() => prisma.creator.findMany({ orderBy: { createdAt: "asc" } }), [] as Array<{
       id: string; nom: string; instagram: string; type: string | null; pays: string;
@@ -201,6 +237,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }>),
     safeGet(() => prisma.produitOffert.findMany({ orderBy: { date: "desc" } }),
       [] as Array<{ produit: string; quantite: number; coutTotal: number }>),
+    safeGet(() => prisma.expense.findMany({ orderBy: { date: "desc" } }),
+      [] as Array<{ id: string; date: Date; category: string; label: string; amount: number; type: string; note: string | null }>),
   ]);
 
   // ── UGC / Creator → composants + coûts ──────────────────────────────────────
@@ -233,6 +271,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     cogsGifts += p.coutTotal;
   }
 
+  // ── Dépenses ─────────────────────────────────────────────────────────────────
+  const adsBudget           = expenses.filter(e => e.category === "Publicité Meta").reduce((s, e) => s + e.amount, 0);
+  const totalExpenses       = expenses.reduce((s, e) => s + e.amount, 0);
+  const totalExpensesNonAds = totalExpenses - adsBudget;
+  const expensesByCategory  = Object.entries(
+    expenses.filter(e => e.category !== "Publicité Meta").reduce((acc, e) => {
+      acc[e.category] = (acc[e.category] ?? 0) + e.amount;
+      return acc;
+    }, {} as Record<string, number>)
+  ).map(([category, total]) => ({ category, total }));
+
   // ── P&L ──────────────────────────────────────────────────────────────────────
   const ca             = shopify.revenue;
   const nbCommandes    = shopify.orderCount;
@@ -241,18 +290,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const cogsTotal      = cogsSales + ugcCogs + cogsGifts;
   const livraison      = shopify.shipping;
   const coutsVariables = cogsTotal + livraison + ugcShipping;
-  const totalHorsAds   = coutsVariables + TOTAL_CHARGES_FIXES;
+  const totalHorsAds   = coutsVariables + totalExpensesNonAds;
 
   const resultatBusiness = ca - totalHorsAds;
   const margeBusiness    = ca > 0 ? (resultatBusiness / ca) * 100 : 0;
-  const totalDepense     = totalHorsAds + ADS_BUDGET;
+  const totalDepense     = totalHorsAds + adsBudget;
   const resultatGlobal   = ca - totalDepense;
   const margeGlobale     = ca > 0 ? (resultatGlobal / ca) * 100 : 0;
   const coutParCommande  = nbCommandes > 0 ? totalDepense / nbCommandes : 0;
   const profitParCmd     = nbCommandes > 0 ? resultatGlobal / nbCommandes : 0;
 
   const margeVarParCmd = nbCommandes > 0 ? resultatBusiness / nbCommandes : 0;
-  const seuilAds       = margeVarParCmd > 0 ? Math.ceil(ADS_BUDGET / margeVarParCmd) : 0;
+  const seuilAds       = margeVarParCmd > 0 && adsBudget > 0 ? Math.ceil(adsBudget / margeVarParCmd) : 0;
 
   // ── Stock par composant (ventes + UGC + autres offerts) ───────────────────────
   type StockStat = { init: number; vendus: number; offerts: number; total: number; restant: number; pct: number; };
@@ -274,12 +323,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const stockRestantValeur = stock.pots.restant * COUT.pot + stock.fouets.restant * COUT.fouet + stock.bols.restant * COUT.bol;
   const stockMortValeur    = stock.cuilleres.restant * COUT.cuillere;
 
+  console.log(`[Loader] ✅ ${shopify.orderBreakdowns.length} commandes envoyées au frontend :`);
+  shopify.orderBreakdowns.forEach(o =>
+    console.log(`  ${o.name} | isRefunded=${o.isRefunded} | items=${o.items.length} | revenue=${o.revenue} | status="${o.financialStatus}"`)
+  );
+
   return {
     ca, nbCommandes, panierMoyen,
     cogsSales, ugcCogs, cogsGifts, cogsTotal, livraison, ugcShipping, coutsVariables,
-    chargesFixes: CHARGES_FIXES, totalChargesFixes: TOTAL_CHARGES_FIXES,
+    expensesByCategory, totalExpensesNonAds, adsBudget, seuilAds,
     totalHorsAds, resultatBusiness, margeBusiness,
-    adsBudget: ADS_BUDGET, seuilAds,
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
     stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
     nbCreateurs, nbByShipping, nbByContent, nbContents, ugcCoutMoyen,
@@ -377,6 +430,12 @@ const HR = () => <hr style={{ border: "none", borderTop: `1px solid ${T.border}`
 export default function Dashboard() {
   const d = useLoaderData<typeof loader>();
 
+  // Log au render — visible si React s'hydrate côté client
+  console.log(`[Dashboard] render client — ${d.orderBreakdowns.length} commandes`);
+  d.orderBreakdowns.forEach(o =>
+    console.log(`  ${o.name} | isRefunded=${o.isRefunded} | items=${o.items.length} | revenue=${o.revenue}`)
+  );
+
   const businessAlert: "green" | "orange" | "red" = d.resultatBusiness < 0 ? "red" : d.margeBusiness < 10 ? "orange" : "green";
   const globalAlert: "green" | "orange" | "red"   = d.resultatGlobal < 0 ? "red" : d.margeGlobale < 10 ? "orange" : "green";
 
@@ -398,7 +457,15 @@ export default function Dashboard() {
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: T.text, letterSpacing: "-0.02em" }}>Dashboard Laya</h1>
               <p style={{ margin: "3px 0 0", fontSize: 12, color: T.muted }}>Données en temps réel · {d.nbCommandes} commandes · CA {eur(d.ca)}</p>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                onClick={() => window.location.reload()}
+                style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "4px 10px", borderRadius: 99, border: "1px solid #c7d2fe", cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>
+                ↺ Rafraîchir
+              </button>
+              <a href="/app/expenses" style={{ fontSize: 11, color: T.red, background: T.redBg, padding: "4px 10px", borderRadius: 99, border: `1px solid ${T.redBdr}`, textDecoration: "none" }}>
+                Dépenses →
+              </a>
               <a href="/app/ugc" style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "4px 10px", borderRadius: 99, border: "1px solid #c7d2fe", textDecoration: "none" }}>
                 UGC →
               </a>
@@ -416,7 +483,7 @@ export default function Dashboard() {
               <HCard label="Chiffre d'affaires" value={d.ca} forceColor="green"
                 sub={`${d.nbCommandes} commandes · panier ${eur(d.panierMoyen)}`} />
               <HCard label="Coûts hors ads" value={d.totalHorsAds} forceColor="red"
-                sub={`Variables ${eur(d.coutsVariables)} + fixes ${eur(d.totalChargesFixes)}`} />
+                sub={`Variables ${eur(d.coutsVariables)} + dépenses ${eur(d.totalExpensesNonAds)}`} />
               <HCard label="Résultat business" value={d.resultatBusiness} forceColor={businessAlert}
                 sub={`Marge : ${pct(d.margeBusiness)}`} />
             </div>
@@ -437,20 +504,34 @@ export default function Dashboard() {
                 sub={`${((d.livraison / Math.max(d.ca, 1)) * 100).toFixed(1)} % du CA`} color={T.red} />
             </div>
 
-            {/* Charges fixes */}
-            <div style={{ marginBottom: 8, fontSize: 11, fontWeight: 600, color: T.dim, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Charges fixes
+            {/* Dépenses (hors publicité) */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: T.dim, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                Dépenses (hors publicité)
+              </div>
+              <a href="/app/expenses" style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "3px 10px", borderRadius: 99, border: "1px solid #c7d2fe", textDecoration: "none" }}>
+                + Gérer →
+              </a>
             </div>
             <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden", boxShadow: T.shadow, marginBottom: 14 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <tbody>
-                  {d.chargesFixes.map((c, i) => (
-                    <tr key={c.key} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined }}>
-                      <td style={{ padding: "10px 16px", color: T.text, fontWeight: 500 }}>{c.label}</td>
-                      <td style={{ padding: "10px 16px", color: T.muted, fontSize: 12 }}>{(c as { note?: string }).note ?? ""}</td>
-                      <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(c.montant)}</td>
+                  {d.expensesByCategory.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} style={{ padding: "12px 16px", color: T.muted, fontSize: 12, textAlign: "center" }}>
+                        Aucune dépense enregistrée —{" "}
+                        <a href="/app/expenses" style={{ color: T.accent, textDecoration: "none" }}>ajouter une dépense</a>
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    d.expensesByCategory.map((e, i) => (
+                      <tr key={e.category} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined }}>
+                        <td style={{ padding: "10px 16px", color: T.text, fontWeight: 500 }}>{e.category}</td>
+                        <td style={{ padding: "10px 16px", color: T.muted, fontSize: 12 }}></td>
+                        <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(e.total)}</td>
+                      </tr>
+                    ))
+                  )}
                   {d.ugcShipping > 0 && (
                     <tr style={{ borderTop: `1px solid ${T.border}` }}>
                       <td style={{ padding: "10px 16px", color: T.text, fontWeight: 500 }}>Livraison UGC & collabs</td>
@@ -459,8 +540,8 @@ export default function Dashboard() {
                     </tr>
                   )}
                   <tr style={{ borderTop: `2px solid ${T.border}`, background: "#f8fafc" }}>
-                    <td colSpan={2} style={{ padding: "10px 16px", fontWeight: 700, color: T.text }}>Total charges fixes</td>
-                    <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 800, color: T.red, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{eur(d.totalChargesFixes + d.ugcShipping)}</td>
+                    <td colSpan={2} style={{ padding: "10px 16px", fontWeight: 700, color: T.text }}>Total dépenses</td>
+                    <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 800, color: T.red, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{eur(d.totalExpensesNonAds + d.ugcShipping)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -484,11 +565,17 @@ export default function Dashboard() {
 
             <div className="g3" style={{ marginBottom: 14 }}>
               <HCard label="Budget dépensé" value={d.adsBudget} forceColor="red"
-                sub="Meta Ads total" />
+                sub={d.adsBudget > 0 ? "Catégorie : Publicité Meta" : "Aucune dépense pub enregistrée"} />
               <div style={{ background: T.orangeBg, border: `2px solid ${T.orangeBdr}`, borderRadius: 18, padding: "20px 20px 18px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: T.orange, opacity: 0.75 }}>ROAS réel</span>
-                <span className="hv" style={{ fontWeight: 800, color: T.orange, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>×0.00</span>
-                <span style={{ fontSize: 13, color: T.orange, opacity: 0.75 }}>0 vente attribuée aux ads</span>
+                {d.adsBudget === 0 ? (
+                  <a href="/app/expenses" style={{ fontSize: 13, color: T.orange, textDecoration: "none", fontWeight: 600 }}>→ Ajouter budget pub</a>
+                ) : (
+                  <>
+                    <span className="hv" style={{ fontWeight: 800, color: T.orange, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>×0.00</span>
+                    <span style={{ fontSize: 13, color: T.orange, opacity: 0.75 }}>0 vente attribuée aux ads</span>
+                  </>
+                )}
               </div>
               <HCard label="Perte ads nette" value={-d.adsBudget} forceColor="red"
                 sub="Aucun CA généré via ads" />
@@ -626,22 +713,46 @@ export default function Dashboard() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "inherit" }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Commande", "Pays", "Produit", "Qté", "Composants", "COGS", "Livraison", "CA"].map(h => (
+                    {["Commande", "Pays", "Statut paiement", "Produit", "Qté", "Composants", "COGS", "Livraison", "CA"].map(h => (
                       <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {d.orderBreakdowns.map((order, oi) =>
-                    order.items.map((item, ii) => {
+                  {d.orderBreakdowns.map((order, oi) => {
+                    const rowBg = (idx: number) => order.isRefunded ? "#fef2f2" : idx === 0 && oi % 2 === 0 ? "#fff" : idx === 0 ? "#f8fafc" : "transparent";
+                    const statusBadge = (
+                      order.isRefunded
+                        ? <span style={{ background: T.redBg, color: T.red, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Remboursée</span>
+                        : order.financialStatus.toUpperCase() === "PARTIALLY_REFUNDED"
+                          ? <span style={{ background: T.orangeBg, color: T.orange, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Part. remboursée</span>
+                          : <span style={{ background: T.greenBg, color: T.green, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>Payée</span>
+                    );
+
+                    // Commande sans line items reconnus : afficher quand même la ligne
+                    if (order.items.length === 0) {
+                      return (
+                        <tr key={`${oi}-empty`} style={{ background: rowBg(0), borderTop: `1px solid ${T.border}` }}>
+                          <td style={{ padding: "8px 10px", fontWeight: 700, color: T.accent, whiteSpace: "nowrap" }}>{order.name}</td>
+                          <td style={{ padding: "8px 10px", color: T.muted }}>{order.country}</td>
+                          <td style={{ padding: "8px 10px" }}>{statusBadge}</td>
+                          <td colSpan={4} style={{ padding: "8px 10px", color: T.dim, fontSize: 11 }}>— aucun article détecté</td>
+                          <td style={{ padding: "8px 10px", color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(order.shipping)}</td>
+                          <td style={{ padding: "8px 10px", fontWeight: 600, color: order.isRefunded ? T.red : T.green, fontVariantNumeric: "tabular-nums" }}>{eur(order.revenue)}</td>
+                        </tr>
+                      );
+                    }
+
+                    return order.items.map((item, ii) => {
                       const isKit = item.comps.fouets > 0;
                       const isUnknown = item.comps.pots === 0 && item.comps.fouets === 0 && item.comps.bols === 0 && item.comps.cuilleres === 0;
                       return (
-                        <tr key={`${oi}-${ii}`} style={{ background: ii === 0 && oi % 2 === 0 ? "#fff" : ii === 0 ? "#f8fafc" : "transparent", borderTop: ii === 0 ? `1px solid ${T.border}` : undefined }}>
+                        <tr key={`${oi}-${ii}`} style={{ background: rowBg(ii), borderTop: ii === 0 ? `1px solid ${T.border}` : undefined }}>
                           {ii === 0 && (
                             <>
                               <td rowSpan={order.items.length} style={{ padding: "8px 10px", fontWeight: 700, color: T.accent, whiteSpace: "nowrap", verticalAlign: "top" }}>{order.name}</td>
                               <td rowSpan={order.items.length} style={{ padding: "8px 10px", color: T.muted, verticalAlign: "top" }}>{order.country}</td>
+                              <td rowSpan={order.items.length} style={{ padding: "8px 10px", verticalAlign: "top" }}>{statusBadge}</td>
                             </>
                           )}
                           <td style={{ padding: "6px 10px", color: T.text, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</td>
@@ -655,17 +766,17 @@ export default function Dashboard() {
                           {ii === 0 && (
                             <>
                               <td rowSpan={order.items.length} style={{ padding: "8px 10px", color: T.muted, whiteSpace: "nowrap", verticalAlign: "top", fontVariantNumeric: "tabular-nums" }}>{eur(order.shipping)}</td>
-                              <td rowSpan={order.items.length} style={{ padding: "8px 10px", fontWeight: 600, color: T.green, whiteSpace: "nowrap", verticalAlign: "top", fontVariantNumeric: "tabular-nums" }}>{eur(order.revenue)}</td>
+                              <td rowSpan={order.items.length} style={{ padding: "8px 10px", fontWeight: 600, color: order.isRefunded ? T.red : T.green, whiteSpace: "nowrap", verticalAlign: "top", fontVariantNumeric: "tabular-nums" }}>{eur(order.revenue)}</td>
                             </>
                           )}
                         </tr>
                       );
-                    })
-                  )}
+                    });
+                  })}
                 </tbody>
                 <tfoot>
                   <tr style={{ background: "#f1f5f9", borderTop: `2px solid ${T.border}` }}>
-                    <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: T.text }}>Total</td>
+                    <td colSpan={6} style={{ padding: "8px 10px", fontWeight: 700, color: T.text }}>Total (hors remboursées)</td>
                     <td style={{ padding: "8px 10px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.cogsSales)}</td>
                     <td style={{ padding: "8px 10px", fontWeight: 700, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(d.livraison)}</td>
                     <td style={{ padding: "8px 10px", fontWeight: 700, color: T.green, fontVariantNumeric: "tabular-nums" }}>{eur(d.ca)}</td>

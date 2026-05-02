@@ -134,6 +134,18 @@ model Todo {
   updatedAt DateTime @updatedAt
 }
 
+model Expense {
+  id        String   @id @default(cuid())
+  date      DateTime
+  category  String
+  label     String
+  amount    Float
+  type      String
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Session {
   id            String    @id
   shop          String

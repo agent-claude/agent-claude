@@ -7,7 +7,7 @@ import {
   parseUgcProduit, compsToKey, keyToComps, coutComps, coutFromKey,
   ugcShippingFromKey, ugcShippingFromText,
   PRODUIT_LABELS, TYPE_LABELS, PAYS_LABELS,
-  SHIPPING_STATUTS, SHIPPING_LABELS, shippingStyle,
+  SHIPPING_STATUTS_ACTIFS, SHIPPING_LABELS, shippingStyle,
   CONTENT_STATUTS, CONTENT_LABELS, contentStyle,
   normShippingStatus,
   eur, fmtComps,
@@ -81,22 +81,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   const totaux = creators.reduce(
-    (acc, c) => ({
-      cogs:  acc.cogs  + (c.coutProduit ?? 0),
-      port:  acc.port  + c.fraisPort,
-      total: acc.total + (c.coutTotalCollab ?? 0),
-      // shipping pipeline
-      ship_en_attente:  acc.ship_en_attente  + (c.shippingStatus === "en_attente"  ? 1 : 0),
-      ship_preparation: acc.ship_preparation + (c.shippingStatus === "preparation" ? 1 : 0),
-      ship_envoye:      acc.ship_envoye      + (c.shippingStatus === "envoye"      ? 1 : 0),
-      ship_livre:       acc.ship_livre       + (c.shippingStatus === "livre"       ? 1 : 0),
-      // content pipeline
-      cont_a_faire:     acc.cont_a_faire     + (c.contentStatus  === "a_faire"     ? 1 : 0),
-      cont_recu:        acc.cont_recu        + (c.contentStatus  === "recu"        ? 1 : 0),
-      cont_poste:       acc.cont_poste       + (c.contentStatus  === "poste"       ? 1 : 0),
-    }),
+    (acc, c) => {
+      const refuse = c.shippingStatus === "refuse";
+      return {
+        // coûts : refusés exclus
+        cogs:  acc.cogs  + (refuse ? 0 : (c.coutProduit ?? 0)),
+        port:  acc.port  + (refuse ? 0 : c.fraisPort),
+        total: acc.total + (refuse ? 0 : (c.coutTotalCollab ?? 0)),
+        // shipping pipeline (actifs seulement)
+        ship_en_attente:  acc.ship_en_attente  + (!refuse && c.shippingStatus === "en_attente"  ? 1 : 0),
+        ship_preparation: acc.ship_preparation + (!refuse && c.shippingStatus === "preparation" ? 1 : 0),
+        ship_envoye:      acc.ship_envoye      + (!refuse && c.shippingStatus === "envoye"      ? 1 : 0),
+        ship_livre:       acc.ship_livre       + (!refuse && c.shippingStatus === "livre"       ? 1 : 0),
+        ship_refuse:      acc.ship_refuse      + (refuse ? 1 : 0),
+        // content pipeline (refusés exclus)
+        cont_a_faire:     acc.cont_a_faire     + (!refuse && c.contentStatus  === "a_faire"     ? 1 : 0),
+        cont_recu:        acc.cont_recu        + (!refuse && c.contentStatus  === "recu"        ? 1 : 0),
+        cont_poste:       acc.cont_poste       + (!refuse && c.contentStatus  === "poste"       ? 1 : 0),
+      };
+    },
     { cogs: 0, port: 0, total: 0,
-      ship_en_attente: 0, ship_preparation: 0, ship_envoye: 0, ship_livre: 0,
+      ship_en_attente: 0, ship_preparation: 0, ship_envoye: 0, ship_livre: 0, ship_refuse: 0,
       cont_a_faire: 0, cont_recu: 0, cont_poste: 0 },
   );
 
@@ -277,10 +282,15 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
   const shipFetcher    = useFetcher();
   const contFetcher    = useFetcher();
   const trackFetcher   = useFetcher();
+  const refuseFetcher  = useFetcher();
+  const deleteFetcher  = useFetcher();
 
-  const currentShipping = (shipFetcher.formData?.get("shippingStatus") as string) ?? c.shippingStatus;
+  const currentShipping = (shipFetcher.formData?.get("shippingStatus") as string)
+    ?? (refuseFetcher.formData?.get("shippingStatus") as string)
+    ?? c.shippingStatus;
   const currentContent  = (contFetcher.formData?.get("contentStatus")  as string) ?? c.contentStatus;
 
+  const isRefuse = currentShipping === "refuse";
   const { color: shipColor, background: shipBg }  = shippingStyle(currentShipping);
   const { color: contColor, background: contBg }  = contentStyle(currentContent);
 
@@ -289,23 +299,35 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
   const doneTodos  = c.todos.filter(t => t.done).length;
   const totalTodos = c.todos.length;
 
+  const rowBg    = isRefuse ? "#fef2f2" : i % 2 === 0 ? "#fff" : "#f8fafc";
+  const dimColor = isRefuse ? "#fca5a5" : undefined;
+
   const selectStyle = (bg: string, color: string): React.CSSProperties => ({
     ...inp, width: "auto", fontSize: 11, padding: "3px 6px",
     background: bg, color, fontWeight: 700, cursor: "pointer",
   });
 
+  function submitShipping(val: string) {
+    refuseFetcher.submit(
+      { id: c.id, shippingStatus: val },
+      { method: "POST", action: "/app/api/creator-statut" },
+    );
+  }
+
   return (
   <>
-    <tr style={{ borderTop: `1px solid ${T.border}`, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+    <tr style={{ borderTop: `1px solid ${T.border}`, background: rowBg, opacity: isRefuse ? 0.75 : 1 }}>
+
       {/* Nom */}
       <td style={{ ...cell, fontWeight: 600, minWidth: 120 }}>
-        <div>{c.nom}</div>
-        {c.instagram && <div style={{ fontSize: 11, color: T.muted }}>{c.instagram}</div>}
+        <div style={{ color: isRefuse ? T.muted : T.text }}>{c.nom}</div>
+        {c.instagram && <div style={{ fontSize: 11, color: T.dim }}>{c.instagram}</div>}
       </td>
 
       {/* Type */}
       <td style={cell}>
-        <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 99, background: "#eef2ff", color: T.accent }}>
+        <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 99,
+          background: isRefuse ? "#f9fafb" : "#eef2ff", color: isRefuse ? T.muted : T.accent }}>
           {typeLabel}
         </span>
       </td>
@@ -315,55 +337,74 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
 
       {/* Produit */}
       <td style={cell}>
-        <div style={{ fontSize: 12 }}>{PRODUIT_LABELS[c.produit] ?? c.produit}</div>
-        <div style={{ fontSize: 11, color: T.muted }}>{fmtComps(comps)}</div>
+        <div style={{ fontSize: 12, color: isRefuse ? T.muted : T.text }}>{PRODUIT_LABELS[c.produit] ?? c.produit}</div>
+        <div style={{ fontSize: 11, color: T.dim }}>{fmtComps(comps)}</div>
       </td>
 
-      {/* Coûts */}
-      <td style={{ ...cell, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(c.fraisPort)}</td>
-      <td style={{ ...cell, color: T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutProduit ?? 0)}</td>
-      <td style={{ ...cell, color: T.red, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{eur(c.coutTotalCollab ?? 0)}</td>
+      {/* Coûts — grisés si refusé */}
+      <td style={{ ...cell, color: isRefuse ? T.dim : T.muted, fontVariantNumeric: "tabular-nums", textDecoration: isRefuse ? "line-through" : "none" }}>
+        {eur(c.fraisPort)}
+      </td>
+      <td style={{ ...cell, color: isRefuse ? T.dim : T.red, fontWeight: 600, fontVariantNumeric: "tabular-nums", textDecoration: isRefuse ? "line-through" : "none" }}>
+        {eur(c.coutProduit ?? 0)}
+      </td>
+      <td style={{ ...cell, color: isRefuse ? T.dim : T.red, fontWeight: 700, fontVariantNumeric: "tabular-nums", textDecoration: isRefuse ? "line-through" : "none" }}>
+        {eur(c.coutTotalCollab ?? 0)}
+      </td>
 
       {/* Statut colis */}
       <td style={cell}>
-        <select
-          value={currentShipping}
-          onChange={e => shipFetcher.submit(
-            { id: c.id, shippingStatus: e.target.value },
-            { method: "POST", action: "/app/api/creator-statut" },
-          )}
-          style={selectStyle(shipBg, shipColor)}
-        >
-          {SHIPPING_STATUTS.map(s => <option key={s} value={s}>{SHIPPING_LABELS[s]}</option>)}
-        </select>
+        {isRefuse ? (
+          <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 99,
+            background: "#fef2f2", color: "#dc2626", border: "1px solid #fca5a5" }}>
+            Refusé
+          </span>
+        ) : (
+          <select
+            value={currentShipping}
+            onChange={e => shipFetcher.submit(
+              { id: c.id, shippingStatus: e.target.value },
+              { method: "POST", action: "/app/api/creator-statut" },
+            )}
+            style={selectStyle(shipBg, shipColor)}
+          >
+            {SHIPPING_STATUTS_ACTIFS.map(s => <option key={s} value={s}>{SHIPPING_LABELS[s]}</option>)}
+          </select>
+        )}
       </td>
 
-      {/* Statut contenu */}
+      {/* Statut contenu — masqué si refusé */}
       <td style={cell}>
-        <select
-          value={currentContent}
-          onChange={e => contFetcher.submit(
-            { id: c.id, contentStatus: e.target.value },
-            { method: "POST", action: "/app/api/creator-statut" },
-          )}
-          style={selectStyle(contBg, contColor)}
-        >
-          {CONTENT_STATUTS.map(s => <option key={s} value={s}>{CONTENT_LABELS[s]}</option>)}
-        </select>
+        {isRefuse ? (
+          <span style={{ fontSize: 11, color: T.dim }}>—</span>
+        ) : (
+          <select
+            value={currentContent}
+            onChange={e => contFetcher.submit(
+              { id: c.id, contentStatus: e.target.value },
+              { method: "POST", action: "/app/api/creator-statut" },
+            )}
+            style={selectStyle(contBg, contColor)}
+          >
+            {CONTENT_STATUTS.map(s => <option key={s} value={s}>{CONTENT_LABELS[s]}</option>)}
+          </select>
+        )}
       </td>
 
-      {/* Tracking */}
+      {/* Tracking — masqué si refusé */}
       <td style={{ ...cell, minWidth: 200 }}>
-        <trackFetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <input type="hidden" name="intent" value="update_tracking" />
-          <input type="hidden" name="id" value={c.id} />
-          <input name="trackingNumber" defaultValue={c.trackingNumber ?? ""} placeholder="N° suivi…"
-            style={{ ...inp, width: 140, fontSize: 12, padding: "3px 7px" }} />
-          <button type="submit"
-            style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
-            ✓
-          </button>
-        </trackFetcher.Form>
+        {!isRefuse && (
+          <trackFetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
+            <input type="hidden" name="intent" value="update_tracking" />
+            <input type="hidden" name="id" value={c.id} />
+            <input name="trackingNumber" defaultValue={c.trackingNumber ?? ""} placeholder="N° suivi…"
+              style={{ ...inp, width: 140, fontSize: 12, padding: "3px 7px" }} />
+            <button type="submit"
+              style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
+              ✓
+            </button>
+          </trackFetcher.Form>
+        )}
       </td>
 
       {/* Notes */}
@@ -373,7 +414,7 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
 
       {/* Tâches */}
       <td style={cell}>
-        {totalTodos > 0 ? (
+        {!isRefuse && totalTodos > 0 ? (
           <button type="button" onClick={() => setShowTodos(v => !v)} style={{
             background: "none", border: `1px solid ${T.border}`, borderRadius: 8,
             padding: "3px 9px", fontSize: 11, cursor: "pointer", fontWeight: 600,
@@ -384,17 +425,40 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
         ) : <span style={{ color: T.dim, fontSize: 11 }}>—</span>}
       </td>
 
-      {/* Supprimer */}
-      <td style={cell}>
-        <trackFetcher.Form method="post">
-          <input type="hidden" name="intent" value="delete" />
-          <input type="hidden" name="id" value={c.id} />
-          <button type="submit" style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13, padding: "2px 6px" }}>✕</button>
-        </trackFetcher.Form>
+      {/* Actions : Refusé + Supprimer */}
+      <td style={{ ...cell, whiteSpace: "nowrap" }}>
+        <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+          {/* Bouton Refusé / Réactiver */}
+          {isRefuse ? (
+            <button type="button"
+              onClick={() => submitShipping("en_attente")}
+              style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #e2e8f0",
+                background: "#f1f5f9", color: T.muted, cursor: "pointer", fontWeight: 600 }}>
+              Réactiver
+            </button>
+          ) : (
+            <button type="button"
+              onClick={() => submitShipping("refuse")}
+              style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #fca5a5",
+                background: "#fef2f2", color: "#dc2626", cursor: "pointer", fontWeight: 600 }}>
+              Refusé
+            </button>
+          )}
+          {/* Bouton Supprimer */}
+          <deleteFetcher.Form method="post">
+            <input type="hidden" name="intent" value="delete" />
+            <input type="hidden" name="id" value={c.id} />
+            <button type="submit"
+              style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #fca5a5",
+                background: "none", color: "#ef4444", cursor: "pointer", fontWeight: 600 }}>
+              Supprimer
+            </button>
+          </deleteFetcher.Form>
+        </div>
       </td>
     </tr>
 
-    {showTodos && totalTodos > 0 && (
+    {showTodos && !isRefuse && totalTodos > 0 && (
       <tr style={{ background: "#f8fafc" }}>
         <td colSpan={13} style={{ padding: "8px 16px 12px 24px", borderBottom: `1px solid ${T.border}` }}>
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: "2px 24px" }}>
@@ -522,8 +586,11 @@ export default function UGCPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 12 }}>
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px 18px", boxShadow: T.shadow }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>Total créateurs</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: T.text }}>{creators.length}</div>
-            <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{totaux.ship_livre} livrés · {totaux.cont_poste} postés</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: T.text }}>{creators.length - totaux.ship_refuse}</div>
+            <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
+              {totaux.ship_livre} livrés · {totaux.cont_poste} postés
+              {totaux.ship_refuse > 0 && <span style={{ color: "#dc2626", marginLeft: 6 }}>· {totaux.ship_refuse} refusé{totaux.ship_refuse > 1 ? "s" : ""}</span>}
+            </div>
           </div>
           <div style={{ background: T.redBg, border: `1px solid ${T.redBdr}`, borderRadius: 14, padding: "16px 18px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: T.dim, marginBottom: 4 }}>COGS produits</div>

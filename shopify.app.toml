@@ -5,9 +5,23 @@ name = "Agent Claude"
 application_url = "https://agent-claude.onrender.com"
 embedded = true
 
+[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_customers,read_fulfillments,read_orders,read_products,write_products"
+
+[auth]
+redirect_urls = [ "https://agent-claude.onrender.com/auth/callback" ]
 
 [product.metafields.app.demo_info]
 type = "single_line_text_field"
@@ -32,20 +46,6 @@ required = true
 [metaobjects.app.example.fields.description]
 name = "Description"
 type = "multi_line_text_field"
-
-[webhooks]
-api_version = "2026-07"
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/scopes_update"
-  topics = [ "app/scopes_update" ]
-
-[auth]
-redirect_urls = [ "https://agent-claude.onrender.com/auth/callback" ]
 
 [build]
 automatically_update_urls_on_dev = true

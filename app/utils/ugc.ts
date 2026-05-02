@@ -202,14 +202,18 @@ export const PAYS_LABELS: Record<string, string> = {
 
 // ─── Statut colis (shippingStatus) ───────────────────────────────────────────
 
-export const SHIPPING_STATUTS = ["en_attente", "preparation", "envoye", "livre"] as const;
+export const SHIPPING_STATUTS = ["en_attente", "preparation", "envoye", "livre", "refuse"] as const;
 export type ShippingStatus = typeof SHIPPING_STATUTS[number];
+
+// Statuts utilisés dans le dropdown (refuse géré via bouton dédié)
+export const SHIPPING_STATUTS_ACTIFS = ["en_attente", "preparation", "envoye", "livre"] as const;
 
 export const SHIPPING_LABELS: Record<string, string> = {
   en_attente:  "En attente",
   preparation: "En préparation",
   envoye:      "Envoyé",
   livre:       "Livré",
+  refuse:      "Refusé",
 };
 
 export const SHIPPING_COLORS: Record<string, { color: string; bg: string }> = {
@@ -217,6 +221,7 @@ export const SHIPPING_COLORS: Record<string, { color: string; bg: string }> = {
   preparation: { color: "#b45309", bg: "#fffbeb" },
   envoye:      { color: "#1d4ed8", bg: "#eff6ff" },
   livre:       { color: "#059669", bg: "#f0fdf4" },
+  refuse:      { color: "#dc2626", bg: "#fef2f2" },
 };
 
 export function shippingStyle(s: string): { color: string; background: string } {
@@ -257,7 +262,7 @@ export function contentStyle(s: string): { color: string; background: string } {
 
 // ─── Statuts legacy (conservés pour CSV import et dashboard) ─────────────────
 
-export const STATUTS = ["en_attente", "preparation", "envoye", "livre"] as const;
+export const STATUTS = ["en_attente", "preparation", "envoye", "livre", "refuse"] as const;
 export type StatutUGC = typeof STATUTS[number];
 
 export const STATUT_LABELS = SHIPPING_LABELS;
