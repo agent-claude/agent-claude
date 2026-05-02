@@ -168,8 +168,8 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       }
     } while (true);
 
-    console.log(`[Orders] total = ${allNodes.length}`);
-    console.log(`[Orders] names = ${allNodes.map(n => n.name ?? "?").join(", ")}`);
+    console.log("[DEBUG] orders count:", allNodes.length);
+    console.log("[DEBUG] order names:", allNodes.map(n => n.name));
 
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0;
     let salesComps: Comps = { ...ZERO };
@@ -225,6 +225,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
+  console.log("[DEBUG] loader start — shop:", session.shop);
   const [shopify, creators, produitsOfferts, expenses] = await Promise.all([
     fetchShopifyOrders(admin as AdminClient, session.shop),
     safeGet(() => prisma.creator.findMany({ orderBy: { createdAt: "asc" } }), [] as Array<{
@@ -240,6 +241,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     safeGet(() => prisma.expense.findMany({ orderBy: { date: "desc" } }),
       [] as Array<{ id: string; date: Date; category: string; label: string; amount: number; type: string; note: string | null }>),
   ]);
+
+  console.log("[DEBUG] expenses:", JSON.stringify(expenses));
 
   // ── UGC / Creator → composants + coûts ──────────────────────────────────────
   let ugcComps: Comps = { ...ZERO };
