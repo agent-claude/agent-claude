@@ -7,24 +7,24 @@ import { login } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const errors = loginErrorMessage(await login(request));
-
-  return { errors };
+  const result = await login(request);
+  if (result instanceof Response) return result;
+  return { errors: loginErrorMessage(result) };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const errors = loginErrorMessage(await login(request));
-
-  return {
-    errors,
-  };
+  const result = await login(request);
+  if (result instanceof Response) return result;
+  return { errors: loginErrorMessage(result) };
 };
 
 export default function Auth() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
-  const [shop, setShop] = useState("");
   const { errors } = actionData || loaderData;
+  const [shop, setShop] = useState(
+    typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("shop") ?? "" : ""
+  );
 
   return (
     <AppProvider embedded={false}>
