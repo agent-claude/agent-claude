@@ -7,7 +7,7 @@ import {
   parseUgcProduit, compsToKey, keyToComps, coutComps, coutFromKey,
   ugcShippingFromKey, ugcShippingFromText,
   PRODUIT_LABELS, TYPE_LABELS, PAYS_LABELS,
-  SHIPPING_STATUTS_ACTIFS, SHIPPING_LABELS, shippingStyle,
+  SHIPPING_STATUTS, SHIPPING_STATUTS_ACTIFS, SHIPPING_LABELS, shippingStyle,
   CONTENT_STATUTS, CONTENT_LABELS, contentStyle,
   normShippingStatus,
   eur, fmtComps,
