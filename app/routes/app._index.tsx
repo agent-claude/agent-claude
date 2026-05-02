@@ -75,7 +75,7 @@ function produitTypeToComps(produit: string, qty: number): Comps {
 
 const ORDERS_QUERY = `
   query GetOrders($cursor: String) {
-    orders(first: 250, sortKey: ORDER_NUMBER, reverse: true, after: $cursor, query: "status:any") {
+    orders(first: 100, sortKey: CREATED_AT, reverse: true, after: $cursor) {
       pageInfo {
         hasNextPage
         endCursor
@@ -181,24 +181,17 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       }
     } while (true);
 
-    console.log("[DEBUG] orders count:", allNodes.length);
-    console.log("[ORDERS RAW NAMES]", allNodes.map(o => ({
-      name: o.name,
-      displayFinancialStatus: o.displayFinancialStatus,
-      currentTotalPrice: o.currentTotalPriceSet?.shopMoney?.amount,
-      originalTotalPrice: o.originalTotalPriceSet?.shopMoney?.amount,
-    })));
+    console.log("[ORDERS]", allNodes.map(o => o.name));
 
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0;
     let salesComps: Comps = { ...ZERO };
     const orderBreakdowns: OrderBreakdown[] = [];
 
     for (const node of allNodes) {
+      // Statut basé UNIQUEMENT sur displayFinancialStatus — jamais sur les montants
       const displayStatus = (node.displayFinancialStatus ?? "").toUpperCase();
-      // isRefunded = UNIQUEMENT remboursement total — PARTIALLY_REFUNDED est une vente normale
-      const isRefunded = displayStatus === "REFUNDED";
-      // Pour les remboursés totaux : rev = 0. Sinon Shopify donne déjà le montant net.
-      const rev = isRefunded ? 0 : parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      const isRefunded    = displayStatus === "REFUNDED";
+      const rev           = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
       const country = (node.shippingAddress?.countryCode ?? "").toUpperCase();
       const items: LineBreakdown[] = (node.lineItems?.edges ?? []).map(({ node: li }) => {
         const comps    = titleToComps(li.title ?? "", li.quantity ?? 1);
@@ -219,7 +212,7 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
       orderBreakdowns.push({
         name: node.name ?? "#?",
-        revenue: isRefunded ? 0 : rev,
+        revenue: rev,
         country: country || "?",
         items,
         orderComps, orderCogs,
