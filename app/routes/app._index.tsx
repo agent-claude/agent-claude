@@ -345,9 +345,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     cuilleres:mkStat(STOCK_INIT.cuilleres,shopify.salesComps.cuilleres,allOfferts.cuilleres),
   };
 
-  const stockTotalAchete   = cogs({ pots: STOCK_INIT.pots, fouets: STOCK_INIT.fouets, bols: STOCK_INIT.bols, cuilleres: STOCK_INIT.cuilleres });
-  const stockRestantValeur = stock.pots.restant * COUT.pot + stock.fouets.restant * COUT.fouet + stock.bols.restant * COUT.bol;
-  const stockMortValeur    = stock.cuilleres.restant * COUT.cuillere;
+  const stockTotalAchete      = cogs({ pots: STOCK_INIT.pots, fouets: STOCK_INIT.fouets, bols: STOCK_INIT.bols, cuilleres: STOCK_INIT.cuilleres });
+  const stockRestantValeur    = stock.pots.restant * COUT.pot + stock.fouets.restant * COUT.fouet + stock.bols.restant * COUT.bol;
+  const stockMarketingValeur  = stock.cuilleres.restant * COUT.cuillere;
 
   return {
     ca, nbCommandes, panierMoyen,
@@ -355,7 +355,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     expensesByCategory, totalExpensesNonAds, adsBudget, caGenereAds, roas, profitAds, seuilAds,
     totalHorsAds, resultatBusiness, margeBusiness,
     totalDepense, resultatGlobal, margeGlobale, coutParCommande, profitParCmd,
-    stock, stockTotalAchete, stockRestantValeur, stockMortValeur,
+    stock, stockTotalAchete, stockRestantValeur, stockMarketingValeur,
     nbCreateurs, nbByShipping, nbByContent, nbContents, ugcCoutMoyen,
     ugcComps,
     creators,
@@ -935,8 +935,9 @@ export default function Dashboard() {
                       const s = d.stock[k];
                       const labels = { pots: "Pots", fouets: "Fouets", bols: "Bols", cuilleres: "Cuillères" };
                       const couts  = { pots: COUT.pot, fouets: COUT.fouet, bols: COUT.bol, cuilleres: COUT.cuillere };
-                      const isMort = k === "cuilleres";
+                      const isMarketing = k === "cuilleres";
                       const color  = s.pct > 80 ? T.red : s.pct > 50 ? T.orange : T.green;
+                      const restantColor = isMarketing ? T.muted : T.green;
                       return (
                         <tr key={k} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined }}>
                           <td style={{ padding: "10px 14px", fontWeight: 600, color: T.text }}>{labels[k]}</td>
@@ -945,16 +946,16 @@ export default function Dashboard() {
                           <td style={{ padding: "10px 14px", color: T.red, textAlign: "right", fontWeight: 500 }}>{s.vendus}</td>
                           <td style={{ padding: "10px 14px", color: T.orange, textAlign: "right", fontWeight: 500 }}>{s.offerts}</td>
                           <td style={{ padding: "10px 14px", color: T.text, textAlign: "right", fontWeight: 700 }}>{s.total}</td>
-                          <td style={{ padding: "10px 14px", color: isMort ? T.red : T.green, textAlign: "right", fontWeight: 600 }}>{s.restant}</td>
+                          <td style={{ padding: "10px 14px", color: restantColor, textAlign: "right", fontWeight: 600 }}>{s.restant}</td>
                           <td style={{ padding: "10px 14px", textAlign: "right" }}>
                             <span style={{ background: color + "1a", color, fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 99 }}>
                               {s.pct.toFixed(0)} %
                             </span>
                           </td>
                           <td style={{ padding: "10px 14px" }}>
-                            {isMort && s.restant > 0 && (
-                              <span style={{ background: T.redBg, color: T.red, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap" }}>
-                                STOCK MORT
+                            {isMarketing && s.restant > 0 && (
+                              <span style={{ background: "#f0f9ff", color: "#0369a1", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap", border: "1px solid #bae6fd" }}>
+                                Marketing
                               </span>
                             )}
                           </td>
@@ -966,15 +967,15 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Stock restant & mort */}
+            {/* Stock restant & marketing */}
             <div className="g3">
               <MCard label="Stock initial acheté" value={eur(d.stockTotalAchete)}
                 sub="200 pots + 100 fouets + 100 bols + 100 cuillères" />
-              <MCard label="Stock utilisable restant" value={eur(d.stockRestantValeur)}
-                sub="pots + fouets + bols restants (hors cuillères)" color={T.green} />
-              <MCard label="Stock mort (cuillères)" value={eur(d.stockMortValeur)}
-                sub={`${d.stock.cuilleres.restant} cuillères non vendables — perte irréversible`}
-                color={T.red} bg={T.redBg} bdr={T.redBdr} />
+              <MCard label="Stock produits restant" value={eur(d.stockRestantValeur)}
+                sub="pots + fouets + bols restants" color={T.green} />
+              <MCard label="Stock marketing (cadeaux)" value={eur(d.stockMarketingValeur)}
+                sub={`${d.stock.cuilleres.restant} cuillères disponibles — cadeaux & bundles`}
+                color="#0369a1" bg="#f0f9ff" bdr="#bae6fd" />
             </div>
           </section>
 
