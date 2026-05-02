@@ -231,8 +231,20 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
     for (const node of allNodes) {
       // Statut basé UNIQUEMENT sur displayFinancialStatus — jamais sur les montants
       const displayStatus = (node.displayFinancialStatus ?? "").toUpperCase();
-      const isRefunded    = displayStatus === "REFUNDED";
-      const rev           = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      const isRefunded    = displayStatus === "REFUNDED";   // PARTIALLY_REFUNDED ≠ remboursé
+      const totalPrice    = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      const originalPrice = parseFloat(node.originalTotalPriceSet?.shopMoney?.amount ?? "0");
+      const refundedAmount = originalPrice > 0 ? +(originalPrice - totalPrice).toFixed(2) : 0;
+      const rev           = totalPrice;
+
+      console.log(
+        `[ORDER] name=${node.name ?? "?"} ` +
+        `status=${displayStatus} ` +
+        `totalPrice=${totalPrice} ` +
+        `refundedAmount=${refundedAmount} ` +
+        `isRefunded=${isRefunded}`
+      );
+
       const country = (node.shippingAddress?.countryCode ?? "").toUpperCase();
       const items: LineBreakdown[] = (node.lineItems?.edges ?? []).map(({ node: li }) => {
         const comps    = titleToComps(li.title ?? "", li.quantity ?? 1);
