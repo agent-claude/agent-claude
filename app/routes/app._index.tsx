@@ -75,7 +75,7 @@ function produitTypeToComps(produit: string, qty: number): Comps {
 
 const ORDERS_QUERY = `
   query GetOrders($cursor: String) {
-    orders(first: 250, sortKey: ORDER_NUMBER, reverse: true, after: $cursor) {
+    orders(first: 250, sortKey: ORDER_NUMBER, reverse: true, after: $cursor, query: "status:any") {
       pageInfo {
         hasNextPage
         endCursor
@@ -188,12 +188,11 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
     for (const node of allNodes) {
       const displayStatus = (node.displayFinancialStatus ?? "").toUpperCase();
-      const isRefunded    = displayStatus === "REFUNDED";
-      const rev     = parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
+      const isRefunded    = displayStatus === "REFUNDED" || displayStatus === "PARTIALLY_REFUNDED";
+      // currentTotalPriceSet reflects post-refund amount — already 0 for fully refunded
+      const rev = isRefunded ? 0 : parseFloat(node.currentTotalPriceSet?.shopMoney?.amount ?? "0");
 
-      if (node.name === "#1007" || node.name === "#1001") {
-        console.log(`[Order ${node.name}] displayFinancialStatus=${node.displayFinancialStatus ?? "null"} isRefunded=${isRefunded} revenue=${rev}`);
-      }
+      console.log(`[Order ${node.name ?? "?"}] status=${displayStatus} isRefunded=${isRefunded} rev=${rev}`);
       const country = (node.shippingAddress?.countryCode ?? "").toUpperCase();
       const items: LineBreakdown[] = (node.lineItems?.edges ?? []).map(({ node: li }) => {
         const comps    = titleToComps(li.title ?? "", li.quantity ?? 1);
