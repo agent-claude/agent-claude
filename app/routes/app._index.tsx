@@ -383,6 +383,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     creators,
     orderBreakdowns: shopify.orderBreakdowns,
     scopeError: shopify.scopeError,
+    _debug: {
+      orderCount: shopify.orderBreakdowns.length,
+      orderNames: shopify.orderBreakdowns.map(o => o.name),
+      order1001: shopify.orderBreakdowns.find(o => o.name === "#1001")
+        ? "✅ présente"
+        : "❌ non renvoyée par Shopify API",
+      chargesTotal: totalExpensesNonAds,
+      chargesSource: expenses.length > 0 ? "DB" : "hardcodé",
+      chargesList: effectiveExpenses
+        .filter(e => e.category !== "Publicité Meta")
+        .map(e => `${e.label ?? e.category} ${e.amount}€`),
+    },
   };
 };
 
@@ -487,6 +499,17 @@ export default function Dashboard() {
       <style>{CSS}</style>
       <div className="dw" style={{ minHeight: "100vh", background: T.bg, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
         <div style={{ maxWidth: 980, margin: "0 auto" }}>
+
+          {/* ── DEBUG TEMPORAIRE ── */}
+          <div style={{ background: "#1e293b", color: "#e2e8f0", borderRadius: 10, padding: "14px 18px", marginBottom: 20, fontSize: 12, fontFamily: "monospace", lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#7dd3fc", marginBottom: 8 }}>🔍 DEBUG</div>
+            <div><b>Commandes reçues :</b> {d._debug.orderCount}</div>
+            <div><b>Liste :</b> {d._debug.orderNames.join(", ") || "—"}</div>
+            <div><b>#1001 :</b> {d._debug.order1001}</div>
+            <div><b>Charges source :</b> {d._debug.chargesSource}</div>
+            <div><b>Charges total :</b> {d._debug.chargesTotal} €</div>
+            <div><b>Charges :</b> {d._debug.chargesList.join(" | ")}</div>
+          </div>
 
           {d.scopeError && (
             <div style={{ background: T.orangeBg, border: `1px solid ${T.orange}`, borderRadius: 10, padding: "12px 16px", marginBottom: 24, fontSize: 13, color: "#92400e" }}>
