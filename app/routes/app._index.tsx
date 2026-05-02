@@ -1,5 +1,6 @@
-import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { useLoaderData, useFetcher } from "react-router";
+import { useState, useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SHIPPING_LABELS, shippingStyle, CONTENT_LABELS, contentStyle } from "../utils/ugc";
@@ -227,15 +228,6 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
-const EXPENSE_DEFAULTS = [
-  { label: "Cartons d'expédition", category: "Packaging",  amount: 95,  type: "ponctuelle", note: null },
-  { label: "Flyers",               category: "Packaging",  amount: 55,  type: "ponctuelle", note: null },
-  { label: "Graphiste",            category: "Graphiste",  amount: 100, type: "ponctuelle", note: null },
-  { label: "Shopify",              category: "Shopify",    amount: 66,  type: "mensuelle",  note: "33 €/mois × 2" },
-  { label: "Stickers",             category: "Packaging",  amount: 100, type: "ponctuelle", note: null },
-  { label: "Événements",           category: "Événements", amount: 450, type: "ponctuelle", note: "3 ventes" },
-];
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
@@ -255,13 +247,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       [] as Array<{ id: string; date: Date; category: string; label: string; amount: number; type: string; note: string | null }>),
   ]);
 
-  // Auto-seed charges par défaut si table vide (idempotent par label)
-  let expenses = rawExpenses;
-  if (expenses.length === 0) {
-    const date = new Date("2025-03-01T00:00:00.000Z");
-    await prisma.expense.createMany({ data: EXPENSE_DEFAULTS.map(e => ({ date, ...e })) });
-    expenses = await prisma.expense.findMany({ orderBy: { date: "desc" } });
-  }
+  const expenses = rawExpenses;
 
   // ── UGC / Creator → composants + coûts ──────────────────────────────────────
   let ugcComps: Comps = { ...ZERO };
@@ -293,7 +279,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     cogsGifts += p.coutTotal;
   }
 
-  // ── Dépenses (toujours depuis DB — auto-seeded ci-dessus si vide) ────────────
+  // ── Dépenses depuis DB ───────────────────────────────────────────────────────
   const adsBudget           = expenses.filter(e => e.category === "Publicité Meta").reduce((s, e) => s + e.amount, 0);
   const totalExpenses       = expenses.reduce((s, e) => s + e.amount, 0);
   const totalExpensesNonAds = totalExpenses - adsBudget;
@@ -356,9 +342,53 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     nbCreateurs, nbByShipping, nbByContent, nbContents, ugcCoutMoyen,
     ugcComps,
     creators,
+    expenses,
     orderBreakdowns: shopify.orderBreakdowns,
     scopeError: shopify.scopeError,
   };
+};
+
+// ─── Action — gestion des charges ─────────────────────────────────────────────
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  await authenticate.admin(request);
+  const form = await request.formData();
+  const intent = form.get("intent") as string;
+
+  if (intent === "expense_create") {
+    await prisma.expense.create({
+      data: {
+        label:    form.get("label") as string,
+        amount:   parseFloat(form.get("amount") as string),
+        category: form.get("category") as string,
+        date:     new Date(form.get("date") as string),
+        type:     "ponctuelle",
+        note:     (form.get("note") as string) || null,
+      },
+    });
+    return { ok: true };
+  }
+
+  if (intent === "expense_update") {
+    await prisma.expense.update({
+      where: { id: form.get("id") as string },
+      data: {
+        label:    form.get("label") as string,
+        amount:   parseFloat(form.get("amount") as string),
+        category: form.get("category") as string,
+        date:     new Date(form.get("date") as string),
+        note:     (form.get("note") as string) || null,
+      },
+    });
+    return { ok: true };
+  }
+
+  if (intent === "expense_delete") {
+    await prisma.expense.delete({ where: { id: form.get("id") as string } });
+    return { ok: true };
+  }
+
+  return { ok: false };
 };
 
 // ─── Formatage ────────────────────────────────────────────────────────────────
@@ -443,6 +473,194 @@ function HCard({ label, value, forceColor, sub }: HCardProps) {
 
 const HR = () => <hr style={{ border: "none", borderTop: `1px solid ${T.border}`, margin: "0 0 36px" }} />;
 
+// ─── Expenses Manager ─────────────────────────────────────────────────────────
+
+const EXPENSE_CATEGORIES = [
+  "Packaging", "Shopify", "Graphiste", "Événements",
+  "Publicité Meta", "UGC / Influence", "Transport", "Logistique", "Marketing", "Autre",
+] as const;
+
+type ExpenseRow = { id: string; date: Date | string; category: string; label: string; amount: number; type: string; note: string | null };
+
+const inputSt: React.CSSProperties = {
+  border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 10px", fontSize: 13,
+  fontFamily: "inherit", color: T.text, background: "#fff", width: "100%", outline: "none",
+};
+const btnPri: React.CSSProperties = {
+  background: T.accent, color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px",
+  fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+};
+const btnSec: React.CSSProperties = {
+  background: "#f1f5f9", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 8,
+  padding: "5px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+};
+const btnDanger: React.CSSProperties = {
+  background: T.redBg, color: T.red, border: `1px solid ${T.redBdr}`, borderRadius: 8,
+  padding: "5px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+};
+
+function ExpenseForm({
+  expense, onCancel, fetcher,
+}: {
+  expense?: ExpenseRow;
+  onCancel: () => void;
+  fetcher: ReturnType<typeof useFetcher>;
+}) {
+  const busy = fetcher.state !== "idle";
+  const defaultDate = expense
+    ? new Date(expense.date).toISOString().split("T")[0]
+    : new Date().toISOString().split("T")[0];
+
+  return (
+    <fetcher.Form method="post" style={{ display: "contents" }}>
+      <input type="hidden" name="intent" value={expense ? "expense_update" : "expense_create"} />
+      {expense && <input type="hidden" name="id" value={expense.id} />}
+      <tr style={{ background: "#eef2ff" }}>
+        <td style={{ padding: "8px 14px" }}>
+          <input name="label" defaultValue={expense?.label} placeholder="Intitulé" required style={inputSt} />
+        </td>
+        <td style={{ padding: "8px 8px" }}>
+          <select name="category" defaultValue={expense?.category ?? "Autre"} style={inputSt}>
+            {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </td>
+        <td style={{ padding: "8px 8px" }}>
+          <input name="date" type="date" defaultValue={defaultDate} required style={inputSt} />
+        </td>
+        <td style={{ padding: "8px 8px" }}>
+          <input name="amount" type="number" step="0.01" min="0" defaultValue={expense?.amount} placeholder="€" required style={{ ...inputSt, textAlign: "right" }} />
+        </td>
+        <td style={{ padding: "8px 14px" }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="submit" disabled={busy} style={btnPri}>{busy ? "…" : expense ? "Sauver" : "Ajouter"}</button>
+            <button type="button" onClick={onCancel} style={btnSec}>✕</button>
+          </div>
+        </td>
+      </tr>
+    </fetcher.Form>
+  );
+}
+
+function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
+  const fetcher = useFetcher();
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data) {
+      setShowAdd(false);
+      setEditingId(null);
+    }
+  }, [fetcher.state, fetcher.data]);
+
+  const nonAds = expenses.filter(e => e.category !== "Publicité Meta");
+  const ads    = expenses.filter(e => e.category === "Publicité Meta");
+
+  const byCategory = Object.entries(
+    expenses.reduce((acc, e) => {
+      acc[e.category] = (acc[e.category] ?? 0) + e.amount;
+      return acc;
+    }, {} as Record<string, number>)
+  ).sort((a, b) => b[1] - a[1]);
+
+  const total = expenses.reduce((s, e) => s + e.amount, 0);
+
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden", boxShadow: T.shadow, marginBottom: 14 }}>
+      {/* ── En-tête avec total + bouton ajouter ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#f8fafc", borderBottom: `1px solid ${T.border}` }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>
+          {expenses.length} charge{expenses.length !== 1 ? "s" : ""} · total{" "}
+          <span style={{ color: T.red }}>{eur(total)}</span>
+        </span>
+        {!showAdd && !editingId && (
+          <button onClick={() => setShowAdd(true)} style={btnPri}>+ Ajouter une charge</button>
+        )}
+      </div>
+
+      {/* ── Table des charges ── */}
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "#f1f5f9" }}>
+              <th style={{ padding: "8px 14px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>Intitulé</th>
+              <th style={{ padding: "8px 8px",  textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>Catégorie</th>
+              <th style={{ padding: "8px 8px",  textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>Date</th>
+              <th style={{ padding: "8px 8px",  textAlign: "right",fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>Montant</th>
+              <th style={{ padding: "8px 14px", borderBottom: `1px solid ${T.border}`, width: 100 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {expenses.length === 0 && !showAdd && (
+              <tr>
+                <td colSpan={5} style={{ padding: "20px 16px", textAlign: "center", color: T.muted, fontSize: 12 }}>
+                  Aucune charge enregistrée — cliquez sur « + Ajouter une charge »
+                </td>
+              </tr>
+            )}
+            {expenses.map((e, i) =>
+              editingId === e.id ? (
+                <ExpenseForm key={e.id} expense={e} onCancel={() => setEditingId(null)} fetcher={fetcher} />
+              ) : (
+                <tr key={e.id} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined, background: e.category === "Publicité Meta" ? "#fffbeb" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                  <td style={{ padding: "9px 14px", fontWeight: 500, color: T.text }}>{e.label}</td>
+                  <td style={{ padding: "9px 8px" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: e.category === "Publicité Meta" ? T.orangeBg : "#f1f5f9", color: e.category === "Publicité Meta" ? T.orange : T.muted }}>
+                      {e.category}
+                    </span>
+                  </td>
+                  <td style={{ padding: "9px 8px", color: T.dim, fontSize: 12 }}>
+                    {new Date(e.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
+                  </td>
+                  <td style={{ padding: "9px 8px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</td>
+                  <td style={{ padding: "9px 14px" }}>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button onClick={() => { setEditingId(e.id); setShowAdd(false); }} style={btnSec}>✏️</button>
+                      <fetcher.Form method="post" style={{ display: "contents" }}>
+                        <input type="hidden" name="intent" value="expense_delete" />
+                        <input type="hidden" name="id" value={e.id} />
+                        <button type="submit" style={btnDanger} onClick={ev => { if (!confirm(`Supprimer « ${e.label} » ?`)) ev.preventDefault(); }}>🗑</button>
+                      </fetcher.Form>
+                    </div>
+                  </td>
+                </tr>
+              )
+            )}
+            {showAdd && (
+              <ExpenseForm onCancel={() => setShowAdd(false)} fetcher={fetcher} />
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* ── Résumé par catégorie ── */}
+      {expenses.length > 0 && (
+        <div style={{ borderTop: `2px solid ${T.border}`, background: "#f8fafc" }}>
+          <div style={{ padding: "10px 16px 4px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: T.dim }}>
+            Répartition par catégorie
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 16px 14px" }}>
+            {byCategory.map(([cat, tot]) => (
+              <span key={cat} style={{
+                fontSize: 12, fontWeight: 600, padding: "4px 12px", borderRadius: 99,
+                background: cat === "Publicité Meta" ? T.orangeBg : T.redBg,
+                color: cat === "Publicité Meta" ? T.orange : T.red,
+                border: `1px solid ${cat === "Publicité Meta" ? T.orangeBdr : T.redBdr}`,
+              }}>
+                {cat} · {eur(tot)}
+              </span>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 16px", borderTop: `1px solid ${T.border}` }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Total général</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(total)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -475,9 +693,6 @@ export default function Dashboard() {
                 style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "4px 10px", borderRadius: 99, border: "1px solid #c7d2fe", cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>
                 ↺ Rafraîchir
               </button>
-              <a href="/app/expenses" style={{ fontSize: 11, color: T.red, background: T.redBg, padding: "4px 10px", borderRadius: 99, border: `1px solid ${T.redBdr}`, textDecoration: "none" }}>
-                Dépenses →
-              </a>
               <a href="/app/ugc" style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "4px 10px", borderRadius: 99, border: "1px solid #c7d2fe", textDecoration: "none" }}>
                 UGC →
               </a>
@@ -516,48 +731,11 @@ export default function Dashboard() {
                 sub={`${((d.livraison / Math.max(d.ca, 1)) * 100).toFixed(1)} % du CA`} color={T.red} />
             </div>
 
-            {/* Dépenses (hors publicité) */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: T.dim, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                Dépenses (hors publicité)
-              </div>
-              <a href="/app/expenses" style={{ fontSize: 11, color: T.accent, background: "#eef2ff", padding: "3px 10px", borderRadius: 99, border: "1px solid #c7d2fe", textDecoration: "none" }}>
-                + Gérer →
-              </a>
+            {/* Dépenses — gestionnaire inline */}
+            <div style={{ marginBottom: 8, fontSize: 11, fontWeight: 600, color: T.dim, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Charges fixes &amp; dépenses
             </div>
-            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden", boxShadow: T.shadow, marginBottom: 14 }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <tbody>
-                  {d.expensesByCategory.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} style={{ padding: "12px 16px", color: T.muted, fontSize: 12, textAlign: "center" }}>
-                        Aucune dépense enregistrée —{" "}
-                        <a href="/app/expenses" style={{ color: T.accent, textDecoration: "none" }}>ajouter une dépense</a>
-                      </td>
-                    </tr>
-                  ) : (
-                    d.expensesByCategory.map((e, i) => (
-                      <tr key={e.category} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined }}>
-                        <td style={{ padding: "10px 16px", color: T.text, fontWeight: 500 }}>{e.category}</td>
-                        <td style={{ padding: "10px 16px", color: T.muted, fontSize: 12 }}></td>
-                        <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(e.total)}</td>
-                      </tr>
-                    ))
-                  )}
-                  {d.ugcShipping > 0 && (
-                    <tr style={{ borderTop: `1px solid ${T.border}` }}>
-                      <td style={{ padding: "10px 16px", color: T.text, fontWeight: 500 }}>Livraison UGC & collabs</td>
-                      <td style={{ padding: "10px 16px", color: T.muted, fontSize: 12 }}>{d.nbCreateurs} colis</td>
-                      <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(d.ugcShipping)}</td>
-                    </tr>
-                  )}
-                  <tr style={{ borderTop: `2px solid ${T.border}`, background: "#f8fafc" }}>
-                    <td colSpan={2} style={{ padding: "10px 16px", fontWeight: 700, color: T.text }}>Total dépenses</td>
-                    <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 800, color: T.red, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{eur(d.totalExpensesNonAds + d.ugcShipping)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <ExpensesManager expenses={d.expenses} />
 
             <div className="g3">
               <MCard label="Panier moyen" value={eur(d.panierMoyen)} sub="par commande" />
@@ -581,7 +759,7 @@ export default function Dashboard() {
               <div style={{ background: T.orangeBg, border: `2px solid ${T.orangeBdr}`, borderRadius: 18, padding: "20px 20px 18px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: T.orange, opacity: 0.75 }}>ROAS réel</span>
                 {d.adsBudget === 0 ? (
-                  <a href="/app/expenses" style={{ fontSize: 13, color: T.orange, textDecoration: "none", fontWeight: 600 }}>→ Ajouter budget pub</a>
+                  <span style={{ fontSize: 13, color: T.orange, fontWeight: 600 }}>→ Ajouter catégorie « Publicité Meta » ci-dessus</span>
                 ) : (
                   <>
                     <span className="hv" style={{ fontWeight: 800, color: T.orange, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>×0.00</span>
