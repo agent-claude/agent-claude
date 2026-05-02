@@ -451,6 +451,11 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* ── VERSION MARKER ── */}
+          <div style={{ background: "#fef08a", border: "2px solid #ca8a04", borderRadius: 8, padding: "6px 14px", marginBottom: 16, fontSize: 13, fontWeight: 700, color: "#78350f" }}>
+            VERSION TEST 1001
+          </div>
+
           {/* ── Header ── */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 32, flexWrap: "wrap", gap: 8 }}>
             <div>
