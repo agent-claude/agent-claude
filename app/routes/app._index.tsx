@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SHIPPING_LABELS, shippingStyle, CONTENT_LABELS, contentStyle } from "../utils/ugc";
@@ -372,6 +372,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
   const intent = form.get("intent") as string;
 
+  console.log(`[Action] intent=${intent}`, Object.fromEntries(form.entries()));
+
   if (intent === "expense_create") {
     await prisma.expense.create({
       data: {
@@ -518,62 +520,41 @@ const btnDanger: React.CSSProperties = {
   padding: "5px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
 };
 
-function ExpenseForm({
-  expense, onCancel, fetcher,
-}: {
-  expense?: ExpenseRow;
-  onCancel: () => void;
-  fetcher: ReturnType<typeof useFetcher>;
-}) {
-  const busy = fetcher.state !== "idle";
-  const defaultDate = expense
-    ? new Date(expense.date).toISOString().split("T")[0]
-    : new Date().toISOString().split("T")[0];
-
-  return (
-    <fetcher.Form method="post" style={{ display: "contents" }}>
-      <input type="hidden" name="intent" value={expense ? "expense_update" : "expense_create"} />
-      {expense && <input type="hidden" name="id" value={expense.id} />}
-      <tr style={{ background: "#eef2ff" }}>
-        <td style={{ padding: "8px 14px" }}>
-          <input name="label" defaultValue={expense?.label} placeholder="Intitulé" required style={inputSt} />
-        </td>
-        <td style={{ padding: "8px 8px" }}>
-          <select name="category" defaultValue={expense?.category ?? "Autre"} style={inputSt}>
-            {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </td>
-        <td style={{ padding: "8px 8px" }}>
-          <input name="date" type="date" defaultValue={defaultDate} required style={inputSt} />
-        </td>
-        <td style={{ padding: "8px 8px" }}>
-          <input name="amount" type="number" step="0.01" min="0" defaultValue={expense?.amount} placeholder="€" required style={{ ...inputSt, textAlign: "right" }} />
-        </td>
-        <td style={{ padding: "8px 14px" }}>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button type="submit" disabled={busy} style={btnPri}>{busy ? "…" : expense ? "Sauver" : "Ajouter"}</button>
-            <button type="button" onClick={onCancel} style={btnSec}>✕</button>
-          </div>
-        </td>
-      </tr>
-    </fetcher.Form>
-  );
-}
-
 function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
-  const fetcher = useFetcher();
+  const fetcher    = useFetcher<{ ok: boolean }>();
+  const lastIntent = useRef("");
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
+  // Close form + show toast after successful submit
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data) {
+    if (fetcher.state === "idle" && fetcher.data?.ok) {
       setShowAdd(false);
       setEditingId(null);
+      const intent = lastIntent.current;
+      if (intent === "expense_create") setToast("Charge ajoutée ✅");
+      else if (intent === "expense_update") setToast("Charge modifiée ✅");
+      else if (intent === "expense_delete") setToast("Charge supprimée ✅");
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.state, fetcher.data]);
 
-  const nonAds = expenses.filter(e => e.category !== "Publicité Meta");
-  const ads    = expenses.filter(e => e.category === "Publicité Meta");
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const editingExpense = editingId ? expenses.find(e => e.id === editingId) : undefined;
+  const formExpense    = showAdd ? undefined : editingExpense;
+  const showForm       = showAdd || !!editingId;
+  const busy           = fetcher.state !== "idle";
+
+  const defaultDate = formExpense
+    ? new Date(formExpense.date).toISOString().split("T")[0]
+    : new Date().toISOString().split("T")[0];
 
   const byCategory = Object.entries(
     expenses.reduce((acc, e) => {
@@ -586,16 +567,59 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
 
   return (
     <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden", boxShadow: T.shadow, marginBottom: 14 }}>
-      {/* ── En-tête avec total + bouton ajouter ── */}
+
+      {/* ── Toast succès ── */}
+      {toast && (
+        <div style={{ background: T.greenBg, border: `1px solid ${T.greenBdr}`, borderRadius: 0, padding: "9px 16px", fontSize: 13, fontWeight: 600, color: T.green, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {toast}
+          <button onClick={() => setToast(null)} style={{ background: "none", border: "none", cursor: "pointer", color: T.green, fontSize: 15, lineHeight: 1 }}>✕</button>
+        </div>
+      )}
+
+      {/* ── En-tête ── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#f8fafc", borderBottom: `1px solid ${T.border}` }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>
           {expenses.length} charge{expenses.length !== 1 ? "s" : ""} · total{" "}
           <span style={{ color: T.red }}>{eur(total)}</span>
         </span>
-        {!showAdd && !editingId && (
+        {!showForm ? (
           <button onClick={() => setShowAdd(true)} style={btnPri}>+ Ajouter une charge</button>
+        ) : (
+          <span style={{ fontSize: 12, color: T.muted }}>{showAdd ? "Nouvelle charge" : `Modifier ${formExpense?.label ?? ""}`}</span>
         )}
       </div>
+
+      {/* ── Formulaire (hors table — évite le bug form-inside-table) ── */}
+      {showForm && (
+        <fetcher.Form method="post" onSubmit={() => { lastIntent.current = formExpense ? "expense_update" : "expense_create"; }}>
+          <input type="hidden" name="intent" value={formExpense ? "expense_update" : "expense_create"} />
+          {formExpense && <input type="hidden" name="id" value={formExpense.id} />}
+          <div style={{ padding: "14px 16px", background: "#eef2ff", borderBottom: `1px solid ${T.border}`, display: "grid", gridTemplateColumns: "1fr 160px 130px 110px auto", gap: 8, alignItems: "end" }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Intitulé</label>
+              <input name="label" defaultValue={formExpense?.label} placeholder="ex : Cartons d'expédition" required style={inputSt} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Catégorie</label>
+              <select name="category" defaultValue={formExpense?.category ?? "Autre"} style={inputSt}>
+                {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Date</label>
+              <input name="date" type="date" defaultValue={defaultDate} required style={inputSt} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: T.dim, display: "block", marginBottom: 4 }}>Montant (€)</label>
+              <input name="amount" type="number" step="0.01" min="0" defaultValue={formExpense?.amount} placeholder="0.00" required style={{ ...inputSt, textAlign: "right" }} />
+            </div>
+            <div style={{ display: "flex", gap: 6, paddingBottom: 1 }}>
+              <button type="submit" disabled={busy} style={btnPri}>{busy ? "…" : formExpense ? "Sauver" : "Ajouter"}</button>
+              <button type="button" onClick={() => { setShowAdd(false); setEditingId(null); }} style={btnSec}>✕</button>
+            </div>
+          </div>
+        </fetcher.Form>
+      )}
 
       {/* ── Table des charges ── */}
       <div style={{ overflowX: "auto" }}>
@@ -606,48 +630,49 @@ function ExpensesManager({ expenses }: { expenses: ExpenseRow[] }) {
               <th style={{ padding: "8px 8px",  textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>Catégorie</th>
               <th style={{ padding: "8px 8px",  textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>Date</th>
               <th style={{ padding: "8px 8px",  textAlign: "right",fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>Montant</th>
-              <th style={{ padding: "8px 14px", borderBottom: `1px solid ${T.border}`, width: 100 }}></th>
+              <th style={{ padding: "8px 14px", borderBottom: `1px solid ${T.border}`, width: 110 }}></th>
             </tr>
           </thead>
           <tbody>
-            {expenses.length === 0 && !showAdd && (
+            {expenses.length === 0 && !showForm && (
               <tr>
                 <td colSpan={5} style={{ padding: "20px 16px", textAlign: "center", color: T.muted, fontSize: 12 }}>
                   Aucune charge enregistrée — cliquez sur « + Ajouter une charge »
                 </td>
               </tr>
             )}
-            {expenses.map((e, i) =>
-              editingId === e.id ? (
-                <ExpenseForm key={e.id} expense={e} onCancel={() => setEditingId(null)} fetcher={fetcher} />
-              ) : (
-                <tr key={e.id} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined, background: isAdsCategory(e.category) ? "#fffbeb" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
-                  <td style={{ padding: "9px 14px", fontWeight: 500, color: T.text }}>{e.label}</td>
-                  <td style={{ padding: "9px 8px" }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: isAdsCategory(e.category) ? T.orangeBg : "#f1f5f9", color: isAdsCategory(e.category) ? T.orange : T.muted }}>
-                      {e.category}
-                    </span>
-                  </td>
-                  <td style={{ padding: "9px 8px", color: T.dim, fontSize: 12 }}>
-                    {new Date(e.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
-                  </td>
-                  <td style={{ padding: "9px 8px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</td>
-                  <td style={{ padding: "9px 14px" }}>
-                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <button onClick={() => { setEditingId(e.id); setShowAdd(false); }} style={btnSec}>✏️</button>
-                      <fetcher.Form method="post" style={{ display: "contents" }}>
-                        <input type="hidden" name="intent" value="expense_delete" />
-                        <input type="hidden" name="id" value={e.id} />
-                        <button type="submit" style={btnDanger} onClick={ev => { if (!confirm(`Supprimer « ${e.label} » ?`)) ev.preventDefault(); }}>🗑</button>
-                      </fetcher.Form>
-                    </div>
-                  </td>
-                </tr>
-              )
-            )}
-            {showAdd && (
-              <ExpenseForm onCancel={() => setShowAdd(false)} fetcher={fetcher} />
-            )}
+            {expenses.map((e, i) => (
+              <tr key={e.id} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined, background: editingId === e.id ? "#eef2ff" : isAdsCategory(e.category) ? "#fffbeb" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                <td style={{ padding: "9px 14px", fontWeight: 500, color: T.text }}>{e.label}</td>
+                <td style={{ padding: "9px 8px" }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: isAdsCategory(e.category) ? T.orangeBg : "#f1f5f9", color: isAdsCategory(e.category) ? T.orange : T.muted }}>
+                    {e.category}
+                  </span>
+                </td>
+                <td style={{ padding: "9px 8px", color: T.dim, fontSize: 12 }}>
+                  {new Date(e.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
+                </td>
+                <td style={{ padding: "9px 8px", textAlign: "right", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(e.amount)}</td>
+                <td style={{ padding: "9px 14px" }}>
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <button
+                      onClick={() => { setEditingId(e.id); setShowAdd(false); }}
+                      style={{ ...btnSec, opacity: editingId === e.id ? 0.5 : 1 }}
+                      disabled={editingId === e.id}
+                    >✏️</button>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Supprimer « ${e.label} » ?`)) {
+                          lastIntent.current = "expense_delete";
+                          fetcher.submit({ intent: "expense_delete", id: e.id }, { method: "post" });
+                        }
+                      }}
+                      style={btnDanger}
+                    >🗑</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
