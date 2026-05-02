@@ -1,7 +1,17 @@
+import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+
+const DEFAULT_EXPENSES = [
+  { label: "Cartons d'expédition", category: "Packaging",  amount: 95,  type: "ponctuelle", note: null },
+  { label: "Flyers",               category: "Packaging",  amount: 55,  type: "ponctuelle", note: null },
+  { label: "Graphiste",            category: "Graphiste",  amount: 100, type: "ponctuelle", note: null },
+  { label: "Shopify",              category: "Shopify",    amount: 66,  type: "mensuelle",  note: "33 €/mois × 2" },
+  { label: "Stickers",             category: "Packaging",  amount: 100, type: "ponctuelle", note: null },
+  { label: "Événements",           category: "Événements", amount: 450, type: "ponctuelle", note: "3 ventes" },
+];
 
 const CATEGORIES = [
   "Publicité Meta",
@@ -25,7 +35,13 @@ const T = {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
-  const expenses = await prisma.expense.findMany({ orderBy: { date: "desc" } });
+  let expenses = await prisma.expense.findMany({ orderBy: { date: "desc" } });
+  // Auto-seed si table vide
+  if (expenses.length === 0) {
+    const date = new Date("2025-03-01T00:00:00.000Z");
+    await prisma.expense.createMany({ data: DEFAULT_EXPENSES.map(e => ({ date, ...e })) });
+    expenses = await prisma.expense.findMany({ orderBy: { date: "desc" } });
+  }
   return { expenses };
 };
 
@@ -47,6 +63,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
+  if (intent === "update") {
+    await prisma.expense.update({
+      where: { id: formData.get("id") as string },
+      data: {
+        date:     new Date(formData.get("date") as string),
+        category: formData.get("category") as string,
+        label:    formData.get("label") as string,
+        amount:   parseFloat(formData.get("amount") as string),
+        type:     formData.get("type") as string,
+        note:     (formData.get("note") as string) || null,
+      },
+    });
+  }
+
   if (intent === "delete") {
     await prisma.expense.delete({ where: { id: formData.get("id") as string } });
   }
@@ -62,6 +92,7 @@ export default function ExpensesPage() {
   const { expenses } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const total = expenses.reduce((s, e) => s + e.amount, 0);
   const byCategory = expenses.reduce((acc, e) => {
@@ -180,40 +211,87 @@ export default function ExpensesPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {expenses.map((e, i) => (
-                      <tr key={e.id} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined, background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
-                        <td style={{ padding: "9px 14px", color: T.muted, whiteSpace: "nowrap" }}>
-                          {new Date(e.date).toLocaleDateString("fr-FR")}
-                        </td>
-                        <td style={{ padding: "9px 14px" }}>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: "#eef2ff", color: T.accent }}>
-                            {e.category}
-                          </span>
-                        </td>
-                        <td style={{ padding: "9px 14px", color: T.text, fontWeight: 500 }}>{e.label}</td>
-                        <td style={{ padding: "9px 14px" }}>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: e.type === "mensuelle" ? T.orangeBg : "#f1f5f9", color: e.type === "mensuelle" ? T.orange : T.muted }}>
-                            {e.type}
-                          </span>
-                        </td>
-                        <td style={{ padding: "9px 14px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-                          {eur(e.amount)}
-                        </td>
-                        <td style={{ padding: "9px 14px", color: T.muted, fontSize: 12, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {e.note ?? "—"}
-                        </td>
-                        <td style={{ padding: "9px 14px" }}>
-                          <Form method="post" style={{ display: "inline" }}>
-                            <input type="hidden" name="intent" value="delete" />
-                            <input type="hidden" name="id" value={e.id} />
-                            <button type="submit"
-                              style={{ background: "none", border: `1px solid ${T.redBdr}`, color: T.red, borderRadius: 6, padding: "3px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
-                              Suppr.
+                    {expenses.map((e, i) => {
+                      const isEditing = editingId === e.id;
+                      const rowBg = i % 2 === 0 ? "#fff" : "#f8fafc";
+                      const inp = { width: "100%", border: `1px solid ${T.border}`, borderRadius: 6, padding: "4px 7px", fontSize: 12, color: T.text, background: "#fff" };
+                      if (isEditing) return (
+                        <tr key={e.id} style={{ borderTop: `1px solid ${T.border}`, background: "#fffbeb" }}>
+                          <td colSpan={7} style={{ padding: "12px 14px" }}>
+                            <Form method="post" onSubmit={() => setEditingId(null)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, alignItems: "end" }}>
+                              <input type="hidden" name="intent" value="update" />
+                              <input type="hidden" name="id" value={e.id} />
+                              <div>
+                                <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.muted, marginBottom: 3 }}>Date</label>
+                                <input type="date" name="date" required defaultValue={new Date(e.date).toISOString().slice(0, 10)} style={inp} />
+                              </div>
+                              <div>
+                                <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.muted, marginBottom: 3 }}>Catégorie</label>
+                                <select name="category" required defaultValue={e.category} style={inp}>
+                                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              </div>
+                              <div>
+                                <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.muted, marginBottom: 3 }}>Libellé</label>
+                                <input type="text" name="label" required defaultValue={e.label} style={inp} />
+                              </div>
+                              <div>
+                                <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.muted, marginBottom: 3 }}>Montant €</label>
+                                <input type="number" name="amount" required min="0" step="0.01" defaultValue={e.amount} style={inp} />
+                              </div>
+                              <div>
+                                <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.muted, marginBottom: 3 }}>Type</label>
+                                <select name="type" required defaultValue={e.type} style={inp}>
+                                  <option value="ponctuelle">Ponctuelle</option>
+                                  <option value="mensuelle">Mensuelle</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label style={{ display: "block", fontSize: 10, fontWeight: 600, color: T.muted, marginBottom: 3 }}>Note</label>
+                                <input type="text" name="note" defaultValue={e.note ?? ""} style={inp} />
+                              </div>
+                              <div style={{ display: "flex", gap: 6, paddingBottom: 1 }}>
+                                <button type="submit" disabled={isSubmitting}
+                                  style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 6, padding: "5px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", flex: 1 }}>
+                                  ✓
+                                </button>
+                                <button type="button" onClick={() => setEditingId(null)}
+                                  style={{ background: "#f1f5f9", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 6, padding: "5px 14px", fontSize: 12, cursor: "pointer", flex: 1 }}>
+                                  ✕
+                                </button>
+                              </div>
+                            </Form>
+                          </td>
+                        </tr>
+                      );
+                      return (
+                        <tr key={e.id} style={{ borderTop: i > 0 ? `1px solid ${T.border}` : undefined, background: rowBg }}>
+                          <td style={{ padding: "9px 14px", color: T.muted, whiteSpace: "nowrap" }}>{new Date(e.date).toLocaleDateString("fr-FR")}</td>
+                          <td style={{ padding: "9px 14px" }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: "#eef2ff", color: T.accent }}>{e.category}</span>
+                          </td>
+                          <td style={{ padding: "9px 14px", color: T.text, fontWeight: 500 }}>{e.label}</td>
+                          <td style={{ padding: "9px 14px" }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: e.type === "mensuelle" ? T.orangeBg : "#f1f5f9", color: e.type === "mensuelle" ? T.orange : T.muted }}>{e.type}</span>
+                          </td>
+                          <td style={{ padding: "9px 14px", fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(e.amount)}</td>
+                          <td style={{ padding: "9px 14px", color: T.muted, fontSize: 12, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.note ?? "—"}</td>
+                          <td style={{ padding: "9px 14px", whiteSpace: "nowrap" }}>
+                            <button type="button" onClick={() => setEditingId(e.id)}
+                              style={{ background: "#eef2ff", color: T.accent, border: `1px solid #c7d2fe`, borderRadius: 6, padding: "3px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 6 }}>
+                              Modifier
                             </button>
-                          </Form>
-                        </td>
-                      </tr>
-                    ))}
+                            <Form method="post" style={{ display: "inline" }}>
+                              <input type="hidden" name="intent" value="delete" />
+                              <input type="hidden" name="id" value={e.id} />
+                              <button type="submit" style={{ background: "none", border: `1px solid ${T.redBdr}`, color: T.red, borderRadius: 6, padding: "3px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+                                Suppr.
+                              </button>
+                            </Form>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                   <tfoot>
                     <tr style={{ background: "#f1f5f9", borderTop: `2px solid ${T.border}` }}>
