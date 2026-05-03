@@ -105,6 +105,7 @@ export function parseUgcProduit(text: string): Comps {
 
 export function compsToKey(c: Comps): string {
   if (c.bols > 0 && c.fouets > 0 && c.pots > 0)              return "kit_ultime";
+  if (c.pots > 0 && c.bols > 0 && !c.fouets)                  return "pot_bol";
   if (c.fouets > 0 && c.pots > 0 && !c.bols && !c.cuilleres) return "kit_decouverte";
   if (c.pots > 0 && c.fouets > 0 && c.cuilleres > 0)         return "pot_fouet_cuillere";
   if (c.pots > 0 && c.cuilleres > 0)                         return "pot_cuillere";

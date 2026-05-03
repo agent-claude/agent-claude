@@ -1,0 +1,20 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "e293ab9a6fa9571e4382828705796c4e"
+name = "Agent Claude"
+application_url = "https://likewise-lion-fiber-heath.trycloudflare.com"
+embedded = true
+
+[webhooks]
+api_version = "2026-04"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_fulfillments,read_orders,read_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [
+  "https://likewise-lion-fiber-heath.trycloudflare.com/auth/callback"
+]
