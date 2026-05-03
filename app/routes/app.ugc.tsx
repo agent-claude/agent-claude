@@ -132,7 +132,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   });
 
-  return redirect("/app/ugc");
+  return redirect(request.url);<form method="post" action="/app/ugc">
 }
 
   if (intent === "create") {
@@ -662,7 +662,7 @@ export default function UGCPage() {
           <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: T.muted, marginBottom: 16 }}>
             Ajouter un créateur
           </div>
-          <form method="post" action="/app/ugc">
+          <form method="post">
             <input type="hidden" name="intent" value="create" />
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 12 }}>
               <label style={lbl}><span style={lbT}>Nom *</span>
