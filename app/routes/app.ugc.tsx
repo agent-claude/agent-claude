@@ -120,102 +120,112 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return null;
   }
 
- if (intent === "update_tracking") {
-  const id = form.get("id") as string;
-  const trackingNumber = ((form.get("trackingNumber") as string) || "").trim();
+  if (intent === "update_tracking") {
+    const id = form.get("id") as string;
+    const trackingNumber = ((form.get("trackingNumber") as string) || "").trim();
 
-  await prisma.creator.update({
-    where: { id },
-    data: {
-      trackingNumber: trackingNumber || null,
-      ...(trackingNumber ? { shippingStatus: "envoye", statut: "envoye" } : {}),
-    },
-  });
+    await prisma.creator.update({
+      where: { id },
+      data: {
+        trackingNumber: trackingNumber || null,
+        ...(trackingNumber ? { shippingStatus: "envoye", statut: "envoye" } : {}),
+      },
+    });
 
-  return redirect(request.url);<form method="post" action="/app/ugc">
-}
+    return redirect(request.url);
+  }
 
   if (intent === "create") {
-    const produit  = form.get("produit") as string;
-    const pays     = form.get("pays") as string;
+    const produit = form.get("produit") as string;
+    const pays = form.get("pays") as string;
     const quantite = parseInt(form.get("quantite") as string, 10) || 1;
-    const cp       = coutFromKey(produit, quantite);
-    const port     = parseFloat(form.get("fraisPort") as string) || ugcShippingFromKey(pays, produit, quantite);
-    const nom      = (form.get("nom") as string).trim();
+    const cp = coutFromKey(produit, quantite);
+    const port =
+      parseFloat(form.get("fraisPort") as string) ||
+      ugcShippingFromKey(pays, produit, quantite);
+    const nom = (form.get("nom") as string).trim();
 
     const creator = await prisma.creator.create({
       data: {
         nom,
-        instagram:      (form.get("instagram") as string).trim(),
-        tiktok:         (form.get("tiktok") as string) || "",
-        type:           form.get("type") as string,
-        plateforme:     "Réseaux sociaux",
+        instagram: (form.get("instagram") as string).trim(),
+        tiktok: (form.get("tiktok") as string) || "",
+        type: form.get("type") as string,
+        plateforme: "Réseaux sociaux",
         pays,
         produit,
         quantite,
-        statut:         "en_attente",
+        statut: "en_attente",
         shippingStatus: (form.get("shippingStatus") as string) || "en_attente",
-        contentStatus:  "a_faire",
-        fraisPort:      port,
+        contentStatus: "a_faire",
+        fraisPort: port,
         trackingNumber: (form.get("trackingNumber") as string) || null,
-        codePromo:      (form.get("codePromo") as string) || null,
-        dateLivraison:  (form.get("dateLivraison") as string) || null,
-        notes:          (form.get("notes") as string) || null,
-        coutProduit:    cp,
+        codePromo: (form.get("codePromo") as string) || null,
+        dateLivraison: (form.get("dateLivraison") as string) || null,
+        notes: (form.get("notes") as string) || null,
+        coutProduit: cp,
         coutTotalCollab: cp + port,
       },
     });
+
     await prisma.todo.createMany({
       data: [
-        { title: `Préparer colis — ${nom}`,          creatorId: creator.id },
-        { title: `Envoyer colis — ${nom}`,            creatorId: creator.id },
+        { title: `Préparer colis — ${nom}`, creatorId: creator.id },
+        { title: `Envoyer colis — ${nom}`, creatorId: creator.id },
         { title: `Ajouter numéro de suivi — ${nom}`, creatorId: creator.id },
-        { title: `Relancer ${nom} pour le contenu`,  creatorId: creator.id },
-        { title: `Poster le contenu de ${nom}`,      creatorId: creator.id },
+        { title: `Relancer ${nom} pour le contenu`, creatorId: creator.id },
+        { title: `Poster le contenu de ${nom}`, creatorId: creator.id },
       ],
     });
-    return null;
+
+    return redirect(request.url);
   }
 
   if (intent === "import_csv") {
     const rows: CsvRow[] = JSON.parse(form.get("rows") as string);
     let imported = 0;
+
     for (const row of rows) {
-      const pays     = normPays(row.paysRaw ?? "");
-      const comps    = parseUgcProduit(row.produitRaw ?? "");
-      const produit  = compsToKey(comps);
-      const cp       = coutComps(comps);
-      const csvPort  = parseFloat((row.fraisPortRaw ?? "").replace(",", "."));
-      const port     = !isNaN(csvPort) && csvPort > 0 ? csvPort : ugcShippingFromText(pays, row.produitRaw ?? "");
+      const pays = normPays(row.paysRaw ?? "");
+      const comps = parseUgcProduit(row.produitRaw ?? "");
+      const produit = compsToKey(comps);
+      const cp = coutComps(comps);
+      const csvPort = parseFloat((row.fraisPortRaw ?? "").replace(",", "."));
+      const port =
+        !isNaN(csvPort) && csvPort > 0
+          ? csvPort
+          : ugcShippingFromText(pays, row.produitRaw ?? "");
       const shipping = normShippingStatus(row.statutRaw ?? "");
 
       await prisma.creator.create({
         data: {
-          nom:            row.nom.trim(),
-          instagram:      row.instagram || "",
-          tiktok:         "",
-          type:           row.type?.toLowerCase().trim() || null,
-          plateforme:     row.plateforme || null,
+          nom: row.nom.trim(),
+          instagram: row.instagram || "",
+          tiktok: "",
+          type: row.type?.toLowerCase().trim() || null,
+          plateforme: row.plateforme || null,
           pays,
           produit,
-          quantite:       1,
-          statut:         shipping,
+          quantite: 1,
+          statut: shipping,
           shippingStatus: shipping,
-          contentStatus:  "a_faire",
-          fraisPort:      port,
+          contentStatus: "a_faire",
+          fraisPort: port,
           trackingNumber: row.trackingNumber || null,
-          codePromo:      row.codePromo || null,
-          dateLivraison:  row.dateLivraison || null,
-          coutProduit:    cp,
+          codePromo: row.codePromo || null,
+          dateLivraison: row.dateLivraison || null,
+          coutProduit: cp,
           coutTotalCollab: cp + port,
         },
       });
+
       imported++;
     }
-    return { importResult: `${imported} créateur(s) importé(s)` };
+
+    return redirect(request.url);
   }
 
-  return redirect("/app/ugc");
+  return redirect(request.url);
 };
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
