@@ -125,6 +125,7 @@ export function keyToComps(produit: string, qty = 1): Comps {
     case "pot":               return { pots: qty,     fouets: 0,   bols: 0,   cuilleres: 0   };
     case "2_pots":            return { pots: 2 * qty, fouets: 0,   bols: 0,   cuilleres: 0   };
     case "3_pots":            return { pots: 3 * qty, fouets: 0,   bols: 0,   cuilleres: 0   };
+    case "pot_bol":          return { pots: qty,     fouets: 0,   bols: qty, cuilleres: 0   };
     case "kit_decouverte":    return { pots: qty,     fouets: qty, bols: 0,   cuilleres: 0   };
     case "kit_ultime":        return { pots: qty,     fouets: qty, bols: qty, cuilleres: 0   };
     case "pot_cuillere":      return { pots: qty,     fouets: 0,   bols: 0,   cuilleres: qty };
@@ -178,6 +179,7 @@ export const PRODUIT_LABELS: Record<string, string> = {
   pot:               "1 Pot",
   "2_pots":          "2 Pots",
   "3_pots":          "3 Pots",
+  pot_bol:           "Pot + Bol",
   kit_decouverte:    "Kit Découverte (pot + fouet)",
   kit_ultime:        "Kit Ultime (pot + fouet + bol)",
   pot_cuillere:      "Pot + Cuillère",

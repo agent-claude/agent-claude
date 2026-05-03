@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData, useNavigation } from "react-router";
+import { useFetcher, useLoaderData, useNavigation, redirect } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import {
@@ -120,12 +120,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return null;
   }
 
-  if (intent === "update_tracking") {
-    const id             = form.get("id") as string;
-    const trackingNumber = (form.get("trackingNumber") as string) || null;
-    await prisma.creator.update({ where: { id }, data: { trackingNumber } });
-    return null;
-  }
+ if (intent === "update_tracking") {
+  const id = form.get("id") as string;
+  const trackingNumber = ((form.get("trackingNumber") as string) || "").trim();
+
+  await prisma.creator.update({
+    where: { id },
+    data: {
+      trackingNumber: trackingNumber || null,
+      ...(trackingNumber ? { shippingStatus: "envoye", statut: "envoye" } : {}),
+    },
+  });
+
+  return redirect("/app/ugc");
+}
 
   if (intent === "create") {
     const produit  = form.get("produit") as string;
@@ -207,7 +215,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { importResult: `${imported} créateur(s) importé(s)` };
   }
 
-  return null;
+  return redirect("/app/ugc");
 };
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
