@@ -180,16 +180,43 @@ async function fetchShopifyOrders(admin: AdminClient, shop: string): Promise<Sho
       }
     } while (true);
 
-    // ── Injection commande virtuelle #1001 ────────────────────────────────────
-    const has1001   = allNodes.some(o => o.name === "#1001");
-    const node1002  = allNodes.find(o => o.name === "#1002");
-    let virtual1001 = false;
-    const virtualNames = new Set<string>();
-    if (!has1001 && node1002) {
-      allNodes.push({ ...node1002, name: "#1001" });
-      virtualNames.add("#1001");
-      virtual1001 = true;
-    }
+    // ── Fallback commandes historiques #1001 / #1002 ─────────────────────────────
+let virtual1001 = false;
+const virtualNames = new Set<string>();
+
+const has1001 = allNodes.some(o => o.name === "#1001");
+const has1002 = allNodes.some(o => o.name === "#1002");
+
+const fallback1001: OrderNode = {
+  name: "#1001",
+  currentTotalPriceSet: { shopMoney: { amount: "23.90", currencyCode: "EUR" } },
+  shippingAddress: { countryCode: "FR" },
+  displayFinancialStatus: "PAID",
+  lineItems: {
+    edges: [{ node: { title: "1 Pot", quantity: 1 } }],
+  },
+};
+
+const fallback1002: OrderNode = {
+  name: "#1002",
+  currentTotalPriceSet: { shopMoney: { amount: "23.90", currencyCode: "EUR" } },
+  shippingAddress: { countryCode: "FR" },
+  displayFinancialStatus: "PAID",
+  lineItems: {
+    edges: [{ node: { title: "1 Pot", quantity: 1 } }],
+  },
+};
+
+if (!has1001) {
+  allNodes.push(fallback1001);
+  virtualNames.add("#1001");
+  virtual1001 = true;
+}
+
+if (!has1002) {
+  allNodes.push(fallback1002);
+  virtualNames.add("#1002");
+}
 
     let revenue = 0, shipping = 0, cogsSales = 0, orderCount = 0, paidCount = 0;
     let salesComps: Comps = { ...ZERO };
