@@ -189,21 +189,21 @@ const has1002 = allNodes.some(o => o.name === "#1002");
 
 const fallback1001: OrderNode = {
   name: "#1001",
-  currentTotalPriceSet: { shopMoney: { amount: "23.90", currencyCode: "EUR" } },
+  currentTotalPriceSet: { shopMoney: { amount: "69.90", currencyCode: "EUR" } },
   shippingAddress: { countryCode: "FR" },
   displayFinancialStatus: "PAID",
   lineItems: {
-    edges: [{ node: { title: "1 Pot", quantity: 1 } }],
+    edges: [{ node: { title: "Kit Ultime", quantity: 1 } }],
   },
 };
 
 const fallback1002: OrderNode = {
   name: "#1002",
-  currentTotalPriceSet: { shopMoney: { amount: "23.90", currencyCode: "EUR" } },
+  currentTotalPriceSet: { shopMoney: { amount: "69.90", currencyCode: "EUR" } },
   shippingAddress: { countryCode: "FR" },
   displayFinancialStatus: "PAID",
   lineItems: {
-    edges: [{ node: { title: "1 Pot", quantity: 1 } }],
+    edges: [{ node: { title: "Kit Ultime", quantity: 1 } }],
   },
 };
 
