@@ -10,7 +10,7 @@ const PDF_LINK = "https://cdn.shopify.com/s/files/1/0963/8576/1664/files/Ebook_-
 
 // ─── Détection langue ─────────────────────────────────────────────────────────
 
-const FR_COUNTRIES = new Set(["FR", "BE", "CH"]);
+const FR_COUNTRIES = new Set(["FR", "BE", "CH", "LU"]);
 
 function detectLang(c: ShopifyCustomer): "FR" | "EN" {
   const country = c.defaultAddress?.countryCodeV2;
@@ -194,38 +194,36 @@ function fmtAmount(amount: string, currency: string): string {
 
 const EMAIL_CONTENT = {
   FR: {
-    subject:    "Ton livret recettes Ube Laya est prêt 💜",
-    header:     "Ton livret recettes est prêt 💜",
-    greeting:   "Hello 💜",
-    intro:      "Merci encore pour ta commande Ube Laya.",
-    body:       "Pour t'aider à profiter au maximum de ta poudre d'ube, on t'offre notre livret recettes : <strong>25 idées simples, gourmandes et réconfortantes</strong> à préparer à la maison.",
-    bodyTxt:    "Pour t'aider à profiter au maximum de ta poudre d'ube, on t'offre notre livret recettes : 25 idées simples, gourmandes et réconfortantes à préparer à la maison.",
-    menuLabel:  "Au menu",
-    recipes:    "Ube Latte &nbsp;·&nbsp; Pancakes Ube &nbsp;·&nbsp; Cookies moelleux<br>Tiramisu Ube &nbsp;·&nbsp; Smoothie violet &nbsp;·&nbsp; Banana Bread",
-    recipesTxt: "– Ube Latte\n– Pancakes Ube\n– Cookies moelleux\n– Tiramisu Ube\n– Smoothie violet\n– Banana Bread",
-    moreIdeas:  "et plein d'autres idées violettes ✨",
-    cta:        "Télécharger le livret Ube Laya &nbsp;→",
-    ctaTxt:     "→ Télécharger le livret Ube Laya :",
-    closing:    "À très vite,",
-    brand:      "Ube Laya",
-    footer:     "Ube Laya · Poudre d'ube premium",
+    subject:  "Un cadeau Ube Laya pour toi 💜",
+    header:   "Un cadeau pour toi 💜",
+    greeting: "Hello,",
+    p1:       "On espère que tu vas bien.",
+    p2:       "Merci encore pour ta dernière commande, ça nous fait vraiment plaisir.",
+    p3:       "Pour te remercier, on est ravis de t'offrir en exclusivité notre eBook de cuisine – édition spéciale été 2026.",
+    p4:       "Tu y trouveras plein de recettes gourmandes à réaliser avec notre poudre d'Ube 100% naturelle : pancakes, desserts, boissons… de quoi te faire plaisir et laisser parler ta créativité.",
+    p5:       "On adorerait découvrir tes créations, alors n'hésite pas à les partager sur Instagram en nous identifiant.",
+    cta:      "Télécharger le eBook Ube Laya",
+    ctaTxt:   "→ Télécharger le eBook Ube Laya :",
+    closing:  "Merci pour ta confiance et ta fidélité, et bienvenue dans l'univers Ube Laya.",
+    sign:     "À très vite,",
+    brand:    "L'équipe Ube Laya",
+    footer:   "Ube Laya · Poudre d'ube premium",
   },
   EN: {
-    subject:    "Your Ube Laya recipe booklet is ready 💜",
-    header:     "Your recipe booklet is ready 💜",
-    greeting:   "Hello 💜",
-    intro:      "Thank you for your Ube Laya order.",
-    body:       "To help you make the most of your ube powder, we're gifting you our recipe booklet: <strong>25 simple, indulgent and comforting ideas</strong> to make at home.",
-    bodyTxt:    "To help you make the most of your ube powder, we're gifting you our recipe booklet: 25 simple, indulgent and comforting ideas to make at home.",
-    menuLabel:  "On the menu",
-    recipes:    "Ube Latte &nbsp;·&nbsp; Ube Pancakes &nbsp;·&nbsp; Soft Cookies<br>Ube Tiramisu &nbsp;·&nbsp; Purple Smoothie &nbsp;·&nbsp; Banana Bread",
-    recipesTxt: "– Ube Latte\n– Ube Pancakes\n– Soft Cookies\n– Ube Tiramisu\n– Purple Smoothie\n– Banana Bread",
-    moreIdeas:  "and many more purple ideas ✨",
-    cta:        "Download your Ube Laya booklet &nbsp;→",
-    ctaTxt:     "→ Download your Ube Laya booklet:",
-    closing:    "See you soon,",
-    brand:      "Ube Laya",
-    footer:     "Ube Laya · Premium ube powder",
+    subject:  "A little gift from Ube Laya 💜",
+    header:   "A little gift for you 💜",
+    greeting: "Hello,",
+    p1:       "We hope you're doing well.",
+    p2:       "Thank you again for your latest order, it truly means a lot to us.",
+    p3:       "To thank you, we're happy to offer you our exclusive cooking eBook – Summer 2026 edition.",
+    p4:       "Inside, you'll find delicious recipes to make with our 100% natural Ube powder: pancakes, desserts, drinks… everything you need to enjoy it and get creative.",
+    p5:       "We'd love to see your creations, so feel free to share them on Instagram and tag us.",
+    cta:      "Download your Ube Laya eBook",
+    ctaTxt:   "→ Download your Ube Laya eBook:",
+    closing:  "Thank you for your trust and loyalty, and welcome to the Ube Laya universe.",
+    sign:     "See you soon,",
+    brand:    "The Ube Laya Team",
+    footer:   "Ube Laya · Premium ube powder",
   },
 } as const;
 
@@ -246,24 +244,19 @@ function buildEmailHtml(lienPdf: string, lang: "FR" | "EN"): string {
         </tr>
         <tr>
           <td style="padding:36px 40px 8px;color:#2d2438;font-family:Georgia,serif;font-size:15px;line-height:1.9;">
-            <p style="margin:0 0 18px;">${c.greeting}</p>
-            <p style="margin:0 0 18px;">${c.intro}</p>
-            <p style="margin:0 0 28px;">${c.body}</p>
-            <table cellpadding="0" cellspacing="0" width="100%" style="background:#faf5f0;border-radius:12px;margin:0 0 32px;">
-              <tr><td style="padding:22px 28px;">
-                <p style="margin:0 0 14px;font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:#a794b8;font-family:Georgia,serif;">${c.menuLabel}</p>
-                <p style="margin:0;font-size:14px;color:#4a3f55;line-height:2.1;font-family:Georgia,serif;">
-                  ${c.recipes}<br>
-                  <span style="color:#a794b8;font-style:italic;">${c.moreIdeas}</span>
-                </p>
-              </td></tr>
-            </table>
+            <p style="margin:0 0 20px;">${c.greeting}</p>
+            <p style="margin:0 0 16px;">${c.p1}</p>
+            <p style="margin:0 0 16px;">${c.p2}</p>
+            <p style="margin:0 0 16px;">${c.p3}</p>
+            <p style="margin:0 0 16px;">${c.p4}</p>
+            <p style="margin:0 0 32px;">${c.p5}</p>
             <table cellpadding="0" cellspacing="0" width="100%">
-              <tr><td align="center" style="padding:0 0 36px;">
-                <a href="${lienPdf}" style="display:inline-block;background:#7c3aed;color:#ffffff;text-decoration:none;font-family:Georgia,serif;font-size:14px;letter-spacing:0.06em;padding:15px 40px;border-radius:50px;">${c.cta}</a>
+              <tr><td align="center" style="padding:0 0 32px;">
+                <a href="${lienPdf}" style="display:inline-block;background:#7c3aed;color:#ffffff;text-decoration:none;font-family:Georgia,serif;font-size:15px;letter-spacing:0.04em;padding:16px 44px;border-radius:50px;">${c.cta}</a>
               </td></tr>
             </table>
-            <p style="margin:0 0 36px;font-size:14px;color:#9d8ca8;">${c.closing}<br><span style="color:#7c3aed;font-weight:bold;">${c.brand}</span></p>
+            <p style="margin:0 0 20px;font-size:14px;color:#4a3f55;line-height:1.8;">${c.closing}</p>
+            <p style="margin:0 0 36px;font-size:14px;color:#9d8ca8;">${c.sign}<br><span style="color:#7c3aed;font-weight:bold;">${c.brand}</span></p>
           </td>
         </tr>
         <tr>
@@ -282,18 +275,22 @@ function buildEmailTexte(lienPdf: string, lang: "FR" | "EN"): string {
   const c = EMAIL_CONTENT[lang];
   return `${c.greeting}
 
-${c.intro}
+${c.p1}
 
-${c.bodyTxt}
+${c.p2}
 
-${c.menuLabel} :
-${c.recipesTxt}
-– ${c.moreIdeas}
+${c.p3}
+
+${c.p4}
+
+${c.p5}
 
 ${c.ctaTxt}
 ${lienPdf}
 
 ${c.closing}
+
+${c.sign}
 ${c.brand}`;
 }
 
