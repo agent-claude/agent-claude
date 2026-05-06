@@ -305,28 +305,65 @@ function ClientRow({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function RecettesPage() {
-  const { customers, livretMap, pdfLink } = useLoaderData<typeof loader>();
-  const [pdfLinkInput, setPdfLinkInput] = useState(
-    pdfLink === "COLLER_ICI_LE_LIEN_DU_PDF" ? "" : pdfLink
-  );
-  const [showEmail, setShowEmail] = useState(false);
+function buildEmailHtml(lienPdf: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Livret Recettes Ube Laya</title></head>
+<body style="margin:0;padding:0;background:#faf5f0;font-family:Georgia,'Times New Roman',serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#faf5f0;">
+    <tr><td align="center" style="padding:40px 16px;">
+      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(124,58,237,0.08);">
+        <tr>
+          <td style="background:#7c3aed;padding:36px 40px;text-align:center;">
+            <p style="margin:0;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#c4b5fd;font-family:Georgia,serif;">Ube Laya</p>
+            <p style="margin:10px 0 0;font-size:22px;font-weight:400;color:#ffffff;font-family:Georgia,serif;line-height:1.5;">Ton livret recettes est prêt 💜</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:36px 40px 8px;color:#2d2438;font-family:Georgia,serif;font-size:15px;line-height:1.9;">
+            <p style="margin:0 0 18px;">Hello 💜</p>
+            <p style="margin:0 0 18px;">Merci encore pour ta commande Ube Laya.</p>
+            <p style="margin:0 0 28px;">Pour t'aider à profiter au maximum de ta poudre d'ube, on t'offre notre livret recettes : <strong>25 idées simples, gourmandes et réconfortantes</strong> à préparer à la maison.</p>
+            <table cellpadding="0" cellspacing="0" width="100%" style="background:#faf5f0;border-radius:12px;margin:0 0 32px;">
+              <tr><td style="padding:22px 28px;">
+                <p style="margin:0 0 14px;font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:#a794b8;font-family:Georgia,serif;">Au menu</p>
+                <p style="margin:0;font-size:14px;color:#4a3f55;line-height:2.1;font-family:Georgia,serif;">
+                  Ube Latte &nbsp;·&nbsp; Pancakes Ube &nbsp;·&nbsp; Cookies moelleux<br>
+                  Tiramisu Ube &nbsp;·&nbsp; Smoothie violet &nbsp;·&nbsp; Banana Bread<br>
+                  <span style="color:#a794b8;font-style:italic;">et plein d'autres idées violettes ✨</span>
+                </p>
+              </td></tr>
+            </table>
+            <table cellpadding="0" cellspacing="0" width="100%">
+              <tr><td align="center" style="padding:0 0 36px;">
+                <a href="${lienPdf}" style="display:inline-block;background:#7c3aed;color:#ffffff;text-decoration:none;font-family:Georgia,serif;font-size:14px;letter-spacing:0.06em;padding:15px 40px;border-radius:50px;">
+                  Télécharger le livret Ube Laya &nbsp;→
+                </a>
+              </td></tr>
+            </table>
+            <p style="margin:0 0 36px;font-size:14px;color:#9d8ca8;">À très vite,<br><span style="color:#7c3aed;font-weight:bold;">Ube Laya</span></p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:#faf5f0;padding:16px 40px;text-align:center;border-top:1px solid #ede8f5;">
+            <p style="margin:0;font-size:11px;color:#c4b5d0;letter-spacing:0.08em;">Ube Laya · Poudre d'ube premium</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
 
-  const totalEligibles = customers.length;
-  const envoyes = customers.filter((c) => livretMap[c.id]?.status === "envoye").length;
-  const aEnvoyer = totalEligibles - envoyes;
-  const tauxEnvoi = totalEligibles > 0 ? Math.round((envoyes / totalEligibles) * 100) : 0;
-
-  const lienPdf = pdfLinkInput.trim() || "[LIEN_DU_PDF]";
-
-  const emailObjet = "Ton livret recettes Ube Laya est prêt 💜";
-  const emailCorps = `Hello 💜
+function buildEmailTexte(lienPdf: string): string {
+  return `Hello 💜
 
 Merci encore pour ta commande Ube Laya.
 
 Pour t'aider à profiter au maximum de ta poudre d'ube, on t'offre notre livret recettes : 25 idées simples, gourmandes et réconfortantes à préparer à la maison.
 
-Tu y trouveras des recettes comme :
+Au menu :
 – Ube Latte
 – Pancakes Ube
 – Cookies moelleux
@@ -335,11 +372,38 @@ Tu y trouveras des recettes comme :
 – Banana Bread
 – et plein d'autres idées violettes ✨
 
-Télécharge ton livret ici :
+→ Télécharger le livret Ube Laya :
 ${lienPdf}
 
 À très vite,
 Ube Laya`;
+}
+
+export default function RecettesPage() {
+  const { customers, livretMap, pdfLink } = useLoaderData<typeof loader>();
+  const [pdfLinkInput, setPdfLinkInput] = useState(
+    pdfLink === "COLLER_ICI_LE_LIEN_DU_PDF" ? "" : pdfLink
+  );
+  const [showEmail, setShowEmail] = useState(false);
+  const [emailTab, setEmailTab] = useState<"html" | "texte">("html");
+  const [copiedWhat, setCopiedWhat] = useState<null | "objet" | "html" | "texte">(null);
+
+  const totalEligibles = customers.length;
+  const envoyes = customers.filter((c) => livretMap[c.id]?.status === "envoye").length;
+  const aEnvoyer = totalEligibles - envoyes;
+  const tauxEnvoi = totalEligibles > 0 ? Math.round((envoyes / totalEligibles) * 100) : 0;
+
+  const lienPdf = pdfLinkInput.trim() || "[LIEN_DU_PDF]";
+  const emailObjet = "Ton livret recettes Ube Laya est prêt 💜";
+  const emailHtml = buildEmailHtml(lienPdf);
+  const emailTexte = buildEmailTexte(lienPdf);
+
+  function copy(text: string, which: "objet" | "html" | "texte") {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedWhat(which);
+      setTimeout(() => setCopiedWhat(null), 2000);
+    });
+  }
 
   const kpiStyle = (accent: string, accentBg: string, accentBdr: string): React.CSSProperties => ({
     background: accentBg,
@@ -454,11 +518,12 @@ Ube Laya`;
             background: T.card,
             border: `1px solid ${T.purpleBdr}`,
             borderRadius: 14,
-            padding: "16px 20px",
+            padding: "18px 22px",
             marginBottom: 24,
             boxShadow: T.shadow,
           }}
         >
+          {/* Toggle header */}
           <button
             type="button"
             onClick={() => setShowEmail((v) => !v)}
@@ -482,58 +547,178 @@ Ube Laya`;
           </button>
 
           {showEmail && (
-            <div style={{ marginTop: 16 }}>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: T.muted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
-                  Objet
+            <div style={{ marginTop: 18 }}>
+
+              {/* Objet */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    Objet
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => copy(emailObjet, "objet")}
+                    style={{
+                      fontSize: 11,
+                      padding: "3px 11px",
+                      borderRadius: 6,
+                      border: `1px solid ${T.purpleBdr}`,
+                      background: copiedWhat === "objet" ? T.purpleBg : "#fff",
+                      color: copiedWhat === "objet" ? T.purple : T.muted,
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {copiedWhat === "objet" ? "✓ Copié !" : "Copier"}
+                  </button>
                 </div>
                 <div
                   style={{
                     background: T.purpleBg,
                     border: `1px solid ${T.purpleBdr}`,
                     borderRadius: 8,
-                    padding: "10px 14px",
+                    padding: "11px 14px",
                     fontSize: 13,
                     color: T.text,
-                    userSelect: "all",
                     fontWeight: 500,
+                    userSelect: "all",
                   }}
                 >
                   {emailObjet}
                 </div>
               </div>
 
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: T.muted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
-                  Message
-                </div>
-                <pre
-                  style={{
-                    background: "#f8fafc",
-                    border: `1px solid ${T.border}`,
-                    borderRadius: 8,
-                    padding: "14px 16px",
-                    fontSize: 13,
-                    color: T.text,
-                    whiteSpace: "pre-wrap",
-                    fontFamily: "inherit",
-                    margin: 0,
-                    userSelect: "all",
-                    lineHeight: 1.7,
-                  }}
-                >
-                  {emailCorps}
-                </pre>
+              {/* Tabs HTML / Texte */}
+              <div style={{ display: "flex", gap: 0, marginBottom: 12, borderBottom: `1px solid ${T.border}` }}>
+                {(["html", "texte"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setEmailTab(tab)}
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      padding: "7px 18px",
+                      border: "none",
+                      background: "none",
+                      cursor: "pointer",
+                      color: emailTab === tab ? T.purple : T.muted,
+                      borderBottom: emailTab === tab ? `2px solid ${T.purple}` : "2px solid transparent",
+                      marginBottom: -1,
+                      letterSpacing: "0.04em",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {tab === "html" ? "Version HTML" : "Version texte"}
+                  </button>
+                ))}
               </div>
 
-              <div style={{ marginTop: 10, fontSize: 11, color: T.dim }}>
-                Cliquer sur le texte pour le sélectionner, puis Copier.
-                {!pdfLinkInput && (
-                  <span style={{ color: T.orange, fontWeight: 600, marginLeft: 6 }}>
-                    ⚠ Renseigne le lien du PDF ci-dessus pour remplacer [LIEN_DU_PDF].
-                  </span>
-                )}
-              </div>
+              {/* HTML tab */}
+              {emailTab === "html" && (
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <span style={{ fontSize: 11, color: T.dim }}>
+                      Coller dans un éditeur email HTML (Klaviyo, Mailchimp…)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => copy(emailHtml, "html")}
+                      style={{
+                        fontSize: 12,
+                        padding: "6px 16px",
+                        borderRadius: 8,
+                        border: "none",
+                        background: copiedWhat === "html" ? T.green : T.purple,
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontWeight: 600,
+                        transition: "background 0.15s",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {copiedWhat === "html" ? "✓ Copié !" : "Copier le HTML"}
+                    </button>
+                  </div>
+                  {/* Preview rendu */}
+                  <div
+                    style={{
+                      border: `1px solid ${T.border}`,
+                      borderRadius: 10,
+                      overflow: "hidden",
+                      background: "#faf5f0",
+                    }}
+                  >
+                    <div style={{ fontSize: 10, fontWeight: 600, color: T.dim, textTransform: "uppercase", letterSpacing: "0.08em", padding: "7px 14px", background: "#f1f5f9", borderBottom: `1px solid ${T.border}` }}>
+                      Aperçu
+                    </div>
+                    <iframe
+                      srcDoc={emailHtml}
+                      title="Email preview"
+                      style={{ width: "100%", height: 520, border: "none", display: "block" }}
+                      sandbox="allow-same-origin"
+                    />
+                  </div>
+                  {!pdfLinkInput && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: T.orange, fontWeight: 600 }}>
+                      ⚠ Le bouton pointe vers [LIEN_DU_PDF] — renseigne le lien du PDF ci-dessus.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Texte tab */}
+              {emailTab === "texte" && (
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <span style={{ fontSize: 11, color: T.dim }}>
+                      Fallback pour clients sans HTML (Gmail, Apple Mail…)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => copy(emailTexte, "texte")}
+                      style={{
+                        fontSize: 12,
+                        padding: "6px 16px",
+                        borderRadius: 8,
+                        border: "none",
+                        background: copiedWhat === "texte" ? T.green : T.purple,
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontWeight: 600,
+                        transition: "background 0.15s",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {copiedWhat === "texte" ? "✓ Copié !" : "Copier le texte"}
+                    </button>
+                  </div>
+                  <pre
+                    style={{
+                      background: "#f8fafc",
+                      border: `1px solid ${T.border}`,
+                      borderRadius: 8,
+                      padding: "16px 18px",
+                      fontSize: 13,
+                      color: T.text,
+                      whiteSpace: "pre-wrap",
+                      fontFamily: "inherit",
+                      margin: 0,
+                      lineHeight: 1.8,
+                      userSelect: "all",
+                    }}
+                  >
+                    {emailTexte}
+                  </pre>
+                  {!pdfLinkInput && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: T.orange, fontWeight: 600 }}>
+                      ⚠ Renseigne le lien du PDF ci-dessus pour remplacer [LIEN_DU_PDF].
+                    </div>
+                  )}
+                </div>
+              )}
+
             </div>
           )}
         </div>
