@@ -27,6 +27,7 @@ export default function AppLayout() {
         <a href="/app" rel="home">Dashboard</a>
         <a href="/app/ugc">UGC</a>
         <a href="/app/todo">To Do List</a>
+        <a href="/app/recettes">Livret Recettes</a>
       </NavMenu>
       <Outlet />
     </AppProvider>
