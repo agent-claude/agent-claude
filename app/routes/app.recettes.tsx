@@ -190,6 +190,15 @@ function fmtAmount(amount: string, currency: string): string {
   return new Intl.NumberFormat("fr-FR", { style: "currency", currency }).format(Number(amount));
 }
 
+function buildGmailUrl(to: string, subject: string, body: string): string {
+  return (
+    "https://mail.google.com/mail/?view=cm&fs=1" +
+    "&to=" + encodeURIComponent(to) +
+    "&su=" + encodeURIComponent(subject) +
+    "&body=" + encodeURIComponent(body)
+  );
+}
+
 // ─── Contenu email bilingue ───────────────────────────────────────────────────
 
 const EMAIL_CONTENT = {
@@ -302,11 +311,13 @@ function ClientRow({
   c,
   livret,
   lang,
+  pdfLink,
   i,
 }: {
   c: ShopifyCustomer;
   livret: LivertEntry;
   lang: "FR" | "EN";
+  pdfLink: string;
   i: number;
 }) {
   const fetcher = useFetcher();
@@ -321,6 +332,14 @@ function ClientRow({
   const isEnvoye = optimisticStatus === "envoye";
   const rowBg = i % 2 === 0 ? "#fff" : "#f8fafc";
   const cell: React.CSSProperties = { padding: "10px 12px", color: T.text, fontSize: 13 };
+
+  const gmailUrl = c.email
+    ? buildGmailUrl(
+        c.email,
+        EMAIL_CONTENT[lang].subject,
+        buildEmailTexte(pdfLink, lang),
+      )
+    : null;
 
   return (
     <tr style={{ borderTop: `1px solid ${T.border}`, background: rowBg }}>
@@ -383,30 +402,63 @@ function ClientRow({
       </td>
 
       <td style={{ ...cell, whiteSpace: "nowrap" }}>
-        <fetcher.Form method="post">
-          <input type="hidden" name="customerId" value={c.id} />
-          <input type="hidden" name="email" value={c.email ?? ""} />
-          <input type="hidden" name="name" value={c.displayName ?? ""} />
-          {!isEnvoye ? (
-            <button
-              name="intent"
-              value="marquer_envoye"
-              type="submit"
-              style={{ background: T.purple, color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <fetcher.Form method="post">
+            <input type="hidden" name="customerId" value={c.id} />
+            <input type="hidden" name="email" value={c.email ?? ""} />
+            <input type="hidden" name="name" value={c.displayName ?? ""} />
+            {!isEnvoye ? (
+              <button
+                name="intent"
+                value="marquer_envoye"
+                type="submit"
+                style={{ background: T.purple, color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", width: "100%" }}
+              >
+                Marquer envoyé
+              </button>
+            ) : (
+              <button
+                name="intent"
+                value="remettre_a_envoyer"
+                type="submit"
+                style={{ background: "none", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", width: "100%" }}
+              >
+                Remettre à envoyer
+              </button>
+            )}
+          </fetcher.Form>
+
+          {gmailUrl ? (
+            <a
+              href={gmailUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 5,
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#374151",
+                background: "#fff",
+                border: `1px solid ${T.border}`,
+                borderRadius: 8,
+                padding: "6px 14px",
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+              }}
             >
-              Marquer envoyé
-            </button>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+                <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" stroke="#EA4335" strokeWidth="1.8" fill="none"/>
+                <path d="M2 6L12 13L22 6" stroke="#EA4335" strokeWidth="1.8" strokeLinecap="round"/>
+              </svg>
+              Ouvrir dans Gmail
+            </a>
           ) : (
-            <button
-              name="intent"
-              value="remettre_a_envoyer"
-              type="submit"
-              style={{ background: "none", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
-            >
-              Remettre à envoyer
-            </button>
+            <span style={{ fontSize: 11, color: T.dim, textAlign: "center" }}>Pas d'email</span>
           )}
-        </fetcher.Form>
+        </div>
       </td>
     </tr>
   );
@@ -696,6 +748,7 @@ export default function RecettesPage() {
                       c={c}
                       livret={livretMap[c.id] as LivertEntry}
                       lang={detectLang(c)}
+                      pdfLink={lienPdf}
                       i={i}
                     />
                   ))}
