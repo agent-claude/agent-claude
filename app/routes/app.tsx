@@ -10,7 +10,14 @@ export const headers: HeadersFunction = (headersArgs) => {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+  console.log("APP.TSX LOADER HIT:", url.pathname + url.search);
+  console.log("  headers.authorization:", request.headers.get("authorization") ? "PRESENT (Bearer ...)" : "ABSENT");
+  console.log("  headers.x-shopify-bounce:", request.headers.get("X-Shopify-Bounce") ?? "absent");
+  console.log("  embedded:", url.searchParams.get("embedded"));
+  console.log("  id_token:", url.searchParams.get("id_token") ? "PRESENT" : "absent");
   await authenticate.admin(request);
+  console.log("APP.TSX LOADER AUTH OK");
   return { apiKey: process.env.SHOPIFY_API_KEY ?? "" };
 }
 
