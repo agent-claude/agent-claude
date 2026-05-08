@@ -80,13 +80,15 @@ const ORDERS_QUERY = `
           id
           name
           createdAt
+          displayFinancialStatus
+          displayFulfillmentStatus
           customer { firstName lastName email }
-          shippingAddress { country countryCode }
-          totalPriceSet         { shopMoney { amount } }
-          subtotalPriceSet      { shopMoney { amount } }
-          totalShippingPriceSet { shopMoney { amount } }
-          totalDiscountsSet     { shopMoney { amount } }
-          totalRefundedSet      { shopMoney { amount } }
+          shippingAddress { country countryCodeV2 }
+          totalPriceSet            { shopMoney { amount } }
+          currentTotalPriceSet     { shopMoney { amount } }
+          currentSubtotalPriceSet  { shopMoney { amount } }
+          totalShippingPriceSet    { shopMoney { amount } }
+          currentTotalDiscountsSet { shopMoney { amount } }
           paymentGatewayNames
           lineItems(first: 20) {
             edges {
@@ -98,8 +100,6 @@ const ORDERS_QUERY = `
               }
             }
           }
-          fulfillmentStatus
-          financialStatus
         }
       }
       pageInfo { hasNextPage endCursor }
@@ -134,21 +134,25 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
         };
       });
 
-      const totalPrice    = parseFloat(((n.totalPriceSet         as { shopMoney: { amount: string } })?.shopMoney?.amount) ?? "0");
-      const subtotalPrice = parseFloat(((n.subtotalPriceSet      as { shopMoney: { amount: string } })?.shopMoney?.amount) ?? "0");
-      const shippingPrice = parseFloat(((n.totalShippingPriceSet as { shopMoney: { amount: string } })?.shopMoney?.amount) ?? "0");
-      const discountTotal = parseFloat(((n.totalDiscountsSet     as { shopMoney: { amount: string } })?.shopMoney?.amount) ?? "0");
-      const refundedTotal = parseFloat(((n.totalRefundedSet      as { shopMoney: { amount: string } })?.shopMoney?.amount) ?? "0");
+      type MoneySet = { shopMoney: { amount: string } };
+      const money = (field: unknown) => parseFloat(((field as MoneySet)?.shopMoney?.amount) ?? "0");
 
-      const customer = n.customer as { firstName?: string; lastName?: string; email?: string } | null;
-      const addr     = n.shippingAddress as { country?: string; countryCode?: string } | null;
-      const countryCode = addr?.countryCode ?? "FR";
+      const totalPrice    = money(n.totalPriceSet);
+      const currentTotal  = money(n.currentTotalPriceSet);
+      const subtotalPrice = money(n.currentSubtotalPriceSet);
+      const shippingPrice = money(n.totalShippingPriceSet);
+      const discountTotal = money(n.currentTotalDiscountsSet);
+      const refundedTotal = Math.max(0, totalPrice - currentTotal);
 
-      const cogs        = orderCogs(lineItems);
-      const realShipping= orderRealShipping(countryCode, lineItems);
-      const netPrice    = Math.max(0, totalPrice - refundedTotal);
-      const paymentFees = netPrice * 0.015;
-      const margin      = netPrice - cogs - realShipping - paymentFees;
+      const customer    = n.customer as { firstName?: string; lastName?: string; email?: string } | null;
+      const addr        = n.shippingAddress as { country?: string; countryCodeV2?: string } | null;
+      const countryCode = addr?.countryCodeV2 ?? "FR";
+
+      const cogs         = orderCogs(lineItems);
+      const realShipping = orderRealShipping(countryCode, lineItems);
+      const netPrice     = currentTotal;
+      const paymentFees  = netPrice * 0.015;
+      const margin       = netPrice - cogs - realShipping - paymentFees;
 
       all.push({
         id: String(n.id),
@@ -165,8 +169,8 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
         refundedTotal,
         paymentGateway: ((n.paymentGatewayNames as string[]) ?? [])[0] ?? "",
         lineItems,
-        fulfillmentStatus: String(n.fulfillmentStatus ?? ""),
-        financialStatus: String(n.financialStatus ?? ""),
+        fulfillmentStatus: String(n.displayFulfillmentStatus ?? ""),
+        financialStatus:   String(n.displayFinancialStatus   ?? ""),
         cogs,
         realShipping,
         paymentFees,
