@@ -7,22 +7,45 @@ import prisma from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   await authenticate.admin(request);
+
   const form = await request.formData();
-  const id   = (form.get("id") as string)?.trim();
 
-  if (!id) return Response.json({ error: "id requis" }, { status: 400 });
+  const id = String(form.get("id") || "").trim();
+  const shippingStatus = String(form.get("shippingStatus") || "").trim();
+  const contentStatus = String(form.get("contentStatus") || "").trim();
 
-  const data: Record<string, string> = {};
-  const shippingStatus = (form.get("shippingStatus") as string)?.trim();
-  const contentStatus  = (form.get("contentStatus")  as string)?.trim();
-
-  if (shippingStatus) data.shippingStatus = shippingStatus;
-  if (contentStatus)  data.contentStatus  = contentStatus;
-
-  if (Object.keys(data).length === 0) {
-    return Response.json({ error: "shippingStatus ou contentStatus requis" }, { status: 400 });
+  if (!id) {
+    return Response.json({ error: "id requis" }, { status: 400 });
   }
 
-  await prisma.creator.update({ where: { id }, data });
+  const data: Record<string, string> = {};
+
+  if (shippingStatus) {
+    data.shippingStatus = shippingStatus;
+
+    // important : ton app utilise aussi "statut" dans plusieurs endroits
+    data.statut = shippingStatus;
+
+    if (shippingStatus === "livre") {
+      data.dateLivraison = new Date().toISOString().slice(0, 10);
+    }
+  }
+
+  if (contentStatus) {
+    data.contentStatus = contentStatus;
+  }
+
+  if (Object.keys(data).length === 0) {
+    return Response.json(
+      { error: "shippingStatus ou contentStatus requis" },
+      { status: 400 },
+    );
+  }
+
+  const updated = await prisma.creator.update({
+    where: { id },
+    data,
+  });
+
   return Response.json({ ok: true, id, ...data });
 };

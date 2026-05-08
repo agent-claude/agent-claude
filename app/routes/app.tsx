@@ -21,6 +21,14 @@ export default function AppLayout() {
   const { apiKey } = useLoaderData<typeof loader>();
   return (
     <AppProvider embedded apiKey={apiKey}>
+      <ui-nav-menu>
+        <a href="/app" rel="home">Dashboard</a>
+        <a href="/app/ugc">UGC & Collabs</a>
+        <a href="/app/recettes">Livret Recettes</a>
+        <a href="/app/produits-offerts">Produits offerts</a>
+        <a href="/app/expenses">Dépenses</a>
+        <a href="/app/todo">To Do</a>
+      </ui-nav-menu>
       <Outlet />
     </AppProvider>
   );
