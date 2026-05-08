@@ -320,48 +320,66 @@ async function fetchOrdersREST(session: { shop: string; accessToken: string }): 
 
 // ─── Commandes manuelles (non remontées par l'API Shopify) ───────────────────
 
-function manualOrder(
+function buildManualOrder(
   id: string,
   name: string,
   createdAt: string,
   customerName: string,
-  totalPrice: number,
+  netPrice: number,
+  countryCode: string,
+  lineItems: LineItem[],
 ): Order {
-  const netPrice = totalPrice;
-  const paymentFees = netPrice * 0.015;
+  const cogs         = orderCogs(lineItems);
+  const realShipping = orderRealShipping(countryCode, lineItems);
+  const paymentFees  = netPrice * 0.015;
+  const margin       = netPrice - cogs - realShipping - paymentFees;
   return {
     id,
     name,
     createdAt,
     customerName,
     customerEmail: "",
-    countryCode: "FR",
-    country: "France",
-    totalPrice,
-    subtotalPrice: totalPrice,
+    countryCode,
+    country: countryCode === "FR" ? "France" : countryCode,
+    totalPrice:   netPrice,
+    subtotalPrice: netPrice,
     shippingPrice: 0,
     discountTotal: 0,
     refundedTotal: 0,
     paymentGateway: "",
-    lineItems: [],
+    lineItems,
     fulfillmentStatus: "FULFILLED",
     financialStatus: "PAID",
     cancelledAt: null,
     closed: false,
     test: false,
     source: "manuel",
-    cogs: 0,
-    realShipping: 0,
+    cogs,
+    realShipping,
     paymentFees,
     netPrice,
-    margin: netPrice - paymentFees,
+    margin,
   };
 }
 
+// Règles bundle Laya :
+//   69,90 € → 3 pots + bol offert  (kit = {pots:3, bols:1})
+//   28,90 € → 1 pot + cuillère offerte
+// Titres choisis pour que parseUgcProduit détecte correctement les composants
+// ("Bol" seul, sans "laya", pour éviter la détection parasite d'un pot)
 const MANUAL_ORDERS: Order[] = [
-  manualOrder("manual-1001", "#1001", "2026-03-02T12:00:00.000Z", "Samir Aouina",    69.90),
-  manualOrder("manual-1002", "#1002", "2026-03-04T12:00:00.000Z", "Imane",           69.90),
-  manualOrder("manual-1003", "#1003", "2026-03-07T12:00:00.000Z", "Julie Galissard", 28.90),
+  buildManualOrder("manual-1001", "#1001", "2026-03-02T12:00:00.000Z", "Samir Aouina",    69.90, "FR", [
+    { title: "3 pots",   variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
+    { title: "Bol",      variantTitle: null, quantity: 1, unitPrice: 0,     sku: null },
+  ]),
+  buildManualOrder("manual-1002", "#1002", "2026-03-04T12:00:00.000Z", "Imane",           69.90, "FR", [
+    { title: "3 pots",   variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
+    { title: "Bol",      variantTitle: null, quantity: 1, unitPrice: 0,     sku: null },
+  ]),
+  buildManualOrder("manual-1003", "#1003", "2026-03-07T12:00:00.000Z", "Julie Galissard", 28.90, "FR", [
+    { title: "1 pot",    variantTitle: null, quantity: 1, unitPrice: 28.90, sku: null },
+    { title: "Cuillère", variantTitle: null, quantity: 1, unitPrice: 0,     sku: null },
+  ]),
 ];
 
 function mergeManualOrders(shopifyOrders: Order[]): Order[] {
