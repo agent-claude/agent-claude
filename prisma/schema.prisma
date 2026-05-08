@@ -47,6 +47,9 @@ model Creator {
   coutProduit     Float?
   coutTotalCollab Float?
   notes           String?
+  address         String?
+  carrier         String?
+  trackingUrl     String?
   createdAt       DateTime @default(now())
   todos           Todo[]
 }

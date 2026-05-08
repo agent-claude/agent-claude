@@ -182,13 +182,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "update_tracking") {
     const id = cleanString(form.get("id"));
     const trackingNumber = optionalString(form.get("trackingNumber"));
+    const carrier        = optionalString(form.get("carrier"));
+    const trackingUrl    = optionalString(form.get("trackingUrl"));
 
     if (!id) return null;
 
     // Ne pas toucher au shippingStatus : il est géré exclusivement via /app/api/creator-statut
     await prisma.creator.update({
       where: { id },
-      data: { trackingNumber },
+      data: { trackingNumber, carrier, trackingUrl },
+    });
+
+    return null;
+  }
+
+  if (intent === "update_address") {
+    const id      = cleanString(form.get("id"));
+    const address = optionalString(form.get("address"));
+
+    if (!id) return null;
+
+    await prisma.creator.update({
+      where: { id },
+      data: { address },
     });
 
     return null;
@@ -212,6 +228,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const manualPort = numberFromForm(form.get("fraisPort"));
     const port = manualPort ?? ugcShippingFromKey(pays, produit, quantite);
 
+    const carrier     = optionalString(form.get("carrier"));
+    const trackingNumber = optionalString(form.get("trackingNumber"));
+
     const creator = await prisma.creator.create({
       data: {
         nom,
@@ -226,7 +245,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shippingStatus,
         contentStatus: "a_faire",
         fraisPort: port,
-        trackingNumber: optionalString(form.get("trackingNumber")),
+        trackingNumber,
+        carrier,
+        trackingUrl: optionalString(form.get("trackingUrl")),
+        address: optionalString(form.get("address")),
         codePromo: optionalString(form.get("codePromo")),
         dateLivraison: optionalString(form.get("dateLivraison")),
         notes: optionalString(form.get("notes")),
@@ -330,6 +352,28 @@ const lbT: React.CSSProperties = {
 };
 const cell: React.CSSProperties = { padding: "8px 10px", color: "#0f172a" };
 
+// ─── Transporteur ─────────────────────────────────────────────────────────────
+
+const CARRIER_LABELS: Record<string, string> = {
+  colissimo:     "Colissimo",
+  mondial_relay: "Mondial Relay",
+  autre:         "Autre",
+};
+
+function resolveTrackingUrl(c: {
+  carrier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+}): string | null {
+  if (c.trackingUrl) return c.trackingUrl;
+  if (!c.trackingNumber) return null;
+  if (c.carrier === "colissimo")
+    return `https://www.laposte.fr/outils/suivre-vos-envois?code=${c.trackingNumber}`;
+  if (c.carrier === "mondial_relay")
+    return `https://www.mondialrelay.fr/suivi-de-colis/?numeroExpedition=${c.trackingNumber}`;
+  return null;
+}
+
 // ─── Mini todo ────────────────────────────────────────────────────────────────
 
 function TodoMini({ todo, creatorNom }: { todo: { id: string; title: string; done: boolean }; creatorNom: string }) {
@@ -394,6 +438,9 @@ type CreatorData = {
   produit: string;
   fraisPort: number;
   trackingNumber: string | null;
+  carrier: string | null;
+  trackingUrl: string | null;
+  address: string | null;
   coutProduit: number | null;
   coutTotalCollab: number | null;
   notes: string | null;
@@ -413,7 +460,10 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
 
   const statusFetcher = useFetcher();
   const trackFetcher = useFetcher();
+  const addressFetcher = useFetcher();
   const deleteFetcher = useFetcher();
+
+  const trackingLink = resolveTrackingUrl(c);
 
   const isRefuse = currentShipping === "refuse";
   const { color: shipColor, background: shipBg } = shippingStyle(currentShipping);
@@ -566,24 +616,55 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
           )}
         </td>
 
-        <td style={{ ...cell, minWidth: 200 }}>
+        <td style={{ ...cell, minWidth: 240 }}>
           {!isRefuse && (
-            <trackFetcher.Form method="post" style={{ display: "flex", gap: 5, alignItems: "center" }}>
-              <input type="hidden" name="intent" value="update_tracking" />
-              <input type="hidden" name="id" value={c.id} />
-              <input
-                name="trackingNumber"
-                defaultValue={c.trackingNumber ?? ""}
-                placeholder="N° suivi…"
-                style={{ ...inp, width: 140, fontSize: 12, padding: "3px 7px" }}
-              />
-              <button
-                type="submit"
-                style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}
-              >
-                ✓
-              </button>
-            </trackFetcher.Form>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <trackFetcher.Form method="post" style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <input type="hidden" name="intent" value="update_tracking" />
+                <input type="hidden" name="id" value={c.id} />
+                <div style={{ display: "flex", gap: 3 }}>
+                  <select
+                    name="carrier"
+                    defaultValue={c.carrier ?? ""}
+                    style={{ ...inp, flex: "0 0 auto", width: 110, fontSize: 11, padding: "3px 5px" }}
+                  >
+                    <option value="">Transporteur…</option>
+                    {Object.entries(CARRIER_LABELS).map(([v, l]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </select>
+                  <input
+                    name="trackingNumber"
+                    defaultValue={c.trackingNumber ?? ""}
+                    placeholder="N° suivi…"
+                    style={{ ...inp, flex: 1, fontSize: 11, padding: "3px 5px", minWidth: 0 }}
+                  />
+                  <button
+                    type="submit"
+                    style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 7, padding: "4px 9px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+                  >
+                    ✓
+                  </button>
+                </div>
+                <input
+                  name="trackingUrl"
+                  defaultValue={c.trackingUrl ?? ""}
+                  placeholder="Lien manuel (optionnel)"
+                  type="url"
+                  style={{ ...inp, fontSize: 11, padding: "3px 5px" }}
+                />
+              </trackFetcher.Form>
+              {trackingLink && (
+                <a
+                  href={trackingLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ fontSize: 11, color: T.accent, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3, fontWeight: 600 }}
+                >
+                  Ouvrir le suivi ↗
+                </a>
+              )}
+            </div>
           )}
         </td>
 
@@ -592,7 +673,7 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
         </td>
 
         <td style={cell}>
-          {!isRefuse && totalTodos > 0 ? (
+          {!isRefuse ? (
             <button
               type="button"
               onClick={() => setShowTodos((v) => !v)}
@@ -604,11 +685,11 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
                 fontSize: 11,
                 cursor: "pointer",
                 fontWeight: 600,
-                color: doneTodos === totalTodos ? T.green : T.muted,
+                color: totalTodos > 0 && doneTodos === totalTodos ? T.green : T.muted,
                 whiteSpace: "nowrap",
               }}
             >
-              {doneTodos}/{totalTodos} {showTodos ? "▲" : "▼"}
+              {totalTodos > 0 ? `${doneTodos}/${totalTodos}` : "Détails"} {showTodos ? "▲" : "▼"}
             </button>
           ) : (
             <span style={{ color: T.dim, fontSize: 11 }}>—</span>
@@ -676,14 +757,36 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
         </td>
       </tr>
 
-      {showTodos && !isRefuse && totalTodos > 0 && (
+      {showTodos && !isRefuse && (
         <tr style={{ background: "#f8fafc" }}>
-          <td colSpan={13} style={{ padding: "8px 16px 12px 24px", borderBottom: `1px solid ${T.border}` }}>
-            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: "2px 24px" }}>
-              {c.todos.map((t) => (
-                <TodoMini key={t.id} todo={t} creatorNom={c.nom} />
-              ))}
-            </ul>
+          <td colSpan={13} style={{ padding: "12px 20px 16px 24px", borderBottom: `1px solid ${T.border}` }}>
+            <addressFetcher.Form method="post" style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: totalTodos > 0 ? 12 : 0 }}>
+              <input type="hidden" name="intent" value="update_address" />
+              <input type="hidden" name="id" value={c.id} />
+              <label style={{ ...lbl, flex: 1 }}>
+                <span style={{ ...lbT, fontSize: 10 }}>Adresse de livraison</span>
+                <textarea
+                  name="address"
+                  defaultValue={c.address ?? ""}
+                  placeholder="Rue, code postal, ville, pays…"
+                  rows={2}
+                  style={{ ...inp, resize: "vertical", fontSize: 12, fontFamily: "inherit" }}
+                />
+              </label>
+              <button
+                type="submit"
+                style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}
+              >
+                Sauvegarder
+              </button>
+            </addressFetcher.Form>
+            {totalTodos > 0 && (
+              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: "2px 24px" }}>
+                {c.todos.map((t) => (
+                  <TodoMini key={t.id} todo={t} creatorNom={c.nom} />
+                ))}
+              </ul>
+            )}
           </td>
         </tr>
       )}
@@ -964,8 +1067,23 @@ export default function UGCPage() {
               </label>
 
               <label style={lbl}>
+                <span style={lbT}>Transporteur</span>
+                <select name="carrier" style={inp}>
+                  <option value="">Sélectionner…</option>
+                  {Object.entries(CARRIER_LABELS).map(([v, l]) => (
+                    <option key={v} value={v}>{l}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={lbl}>
                 <span style={lbT}>N° suivi</span>
                 <input name="trackingNumber" placeholder="LP: 5Y00..." style={inp} />
+              </label>
+
+              <label style={lbl}>
+                <span style={lbT}>Lien suivi manuel</span>
+                <input name="trackingUrl" type="url" placeholder="https://..." style={inp} />
               </label>
 
               <label style={lbl}>
@@ -976,6 +1094,11 @@ export default function UGCPage() {
               <label style={lbl}>
                 <span style={lbT}>Notes</span>
                 <input name="notes" placeholder="ex: 2 vidéos, contrat..." style={inp} />
+              </label>
+
+              <label style={{ ...lbl, gridColumn: "1 / -1" }}>
+                <span style={lbT}>Adresse de livraison</span>
+                <textarea name="address" placeholder="Rue, code postal, ville, pays…" rows={2} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} />
               </label>
             </div>
 
@@ -1005,7 +1128,7 @@ export default function UGCPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f1f5f9" }}>
-                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Colis", "Contenu", "N° suivi", "Notes", "Tâches", ""].map((h) => (
+                    {["Nom", "Type", "Pays", "Produit / Comps", "Port", "COGS", "Total", "Colis", "Contenu", "Suivi", "Notes", "Tâches", ""].map((h) => (
                       <th key={h} style={{ padding: "10px 10px", textAlign: "left", fontWeight: 600, color: T.muted, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` }}>
                         {h}
                       </th>
