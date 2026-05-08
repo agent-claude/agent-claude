@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import type React from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, redirect } from "react-router";
@@ -183,17 +183,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const id = cleanString(form.get("id"));
     const trackingNumber = optionalString(form.get("trackingNumber"));
 
-    if (!id) return redirect(request.url);
+    if (!id) return null;
 
+    // Ne pas toucher au shippingStatus : il est géré exclusivement via /app/api/creator-statut
     await prisma.creator.update({
       where: { id },
-      data: {
-        trackingNumber,
-        ...(trackingNumber ? { shippingStatus: "envoye", statut: "envoye" } : {}),
-      },
+      data: { trackingNumber },
     });
 
-    return redirect(request.url);
+    return null;
   }
 
   if (intent === "create") {
@@ -408,6 +406,10 @@ function CreatorRow({ c, i }: { c: CreatorData; i: number }) {
   const [showTodos, setShowTodos] = useState(false);
   const [currentShipping, setCurrentShipping] = useState(c.shippingStatus);
   const [currentContent, setCurrentContent] = useState(c.contentStatus);
+
+  // Sync avec les données fraîches du loader après revalidation
+  useEffect(() => { setCurrentShipping(c.shippingStatus); }, [c.shippingStatus]);
+  useEffect(() => { setCurrentContent(c.contentStatus); }, [c.contentStatus]);
 
   const statusFetcher = useFetcher();
   const trackFetcher = useFetcher();
