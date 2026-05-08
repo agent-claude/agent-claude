@@ -161,6 +161,18 @@ model RecetteLivret {
   updatedAt  DateTime  @updatedAt
 }
 
+model StockAchat {
+  id           String   @id @default(cuid())
+  date         String
+  composant    String   // "pot" | "cuillere" | "fouet" | "bol" | "packaging"
+  fournisseur  String?
+  quantite     Int
+  prixUnitaire Float
+  coutTotal    Float
+  notes        String?
+  createdAt    DateTime @default(now())
+}
+
 model Session {
   id            String    @id
   shop          String

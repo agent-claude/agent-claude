@@ -27,6 +27,7 @@ export default function AppLayout() {
         <a href="/app/ugc">UGC & Collabs</a>
         <a href="/app/recettes">Livret Recettes</a>
         <a href="/app/produits-offerts">Produits offerts</a>
+        <a href="/app/stock">Stock & Coûts</a>
         <a href="/app/expenses">Dépenses</a>
         <a href="/app/todo">To Do</a>
       </ui-nav-menu>

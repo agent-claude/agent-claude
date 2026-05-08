@@ -9,7 +9,9 @@ export interface Comps {
 
 export const ZERO: Comps = { pots: 0, fouets: 0, bols: 0, cuilleres: 0 };
 
-const COUT = { pot: 3.77055, fouet: 4.1806, bol: 4.1806, cuillere: 2.40 } as const;
+export type UnitCosts = { pot: number; fouet: number; bol: number; cuillere: number; packaging?: number };
+export const DEFAULT_COSTS: UnitCosts = { pot: 3.77055, fouet: 4.1806, bol: 4.1806, cuillere: 2.40 };
+const COUT = DEFAULT_COSTS;
 
 // ─── Normalisation texte ──────────────────────────────────────────────────────
 
@@ -139,8 +141,9 @@ export function keyToComps(produit: string, qty = 1): Comps {
 
 // ─── Coût produit ─────────────────────────────────────────────────────────────
 
-export function coutComps(c: Comps): number {
-  return c.pots * COUT.pot + c.fouets * COUT.fouet + c.bols * COUT.bol + c.cuilleres * COUT.cuillere;
+export function coutComps(c: Comps, costs?: UnitCosts): number {
+  const C = costs ?? COUT;
+  return c.pots * C.pot + c.fouets * C.fouet + c.bols * C.bol + c.cuilleres * C.cuillere;
 }
 
 export function coutFromKey(produit: string, qty = 1): number {

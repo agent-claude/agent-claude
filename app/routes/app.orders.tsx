@@ -4,7 +4,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { parseUgcProduit, coutComps, ugcShippingCost, compsToKey, PRODUIT_LABELS } from "../utils/ugc";
+import { parseUgcProduit, coutComps, ugcShippingCost, compsToKey, PRODUIT_LABELS, DEFAULT_COSTS } from "../utils/ugc";
+import type { UnitCosts } from "../utils/ugc";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,10 +61,10 @@ type DbExpense = {
 
 // ─── Helpers produit / livraison ──────────────────────────────────────────────
 
-function orderCogs(items: LineItem[]): number {
+function orderCogs(items: LineItem[], costs?: UnitCosts): number {
   return items.reduce((s, item) => {
     const comps = parseUgcProduit(`${item.title} ${item.variantTitle ?? ""}`);
-    return s + coutComps(comps) * item.quantity;
+    return s + coutComps(comps, costs) * item.quantity;
   }, 0);
 }
 
@@ -79,12 +80,12 @@ function orderRealShipping(countryCode: string, items: LineItem[]): number {
   return ugcShippingCost(countryCode || "FR", total);
 }
 
-function orderCogsMain(items: LineItem[]): number {
-  return orderCogs(items.filter((li) => li.unitPrice > 0.005));
+function orderCogsMain(items: LineItem[], costs?: UnitCosts): number {
+  return orderCogs(items.filter((li) => li.unitPrice > 0.005), costs);
 }
 
-function orderCogsGift(items: LineItem[]): number {
-  return orderCogs(items.filter((li) => li.unitPrice <= 0.005));
+function orderCogsGift(items: LineItem[], costs?: UnitCosts): number {
+  return orderCogs(items.filter((li) => li.unitPrice <= 0.005), costs);
 }
 
 function orderGiftLabel(items: LineItem[]): string {
@@ -155,7 +156,7 @@ const ORDERS_QUERY = `
 `;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchAllOrders(admin: any): Promise<Order[]> {
+async function fetchAllOrders(admin: any, costs?: UnitCosts): Promise<Order[]> {
   const all: Order[] = [];
   let cursor: string | null = null;
   let hasNext = true;
@@ -199,9 +200,9 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
       const addr        = n.shippingAddress as { country?: string; countryCodeV2?: string } | null;
       const countryCode = addr?.countryCodeV2 ?? "FR";
 
-      const cogs         = orderCogs(lineItems);
-      const cogsMain     = orderCogsMain(lineItems);
-      const cogsGift     = orderCogsGift(lineItems);
+      const cogs         = orderCogs(lineItems, costs);
+      const cogsMain     = orderCogsMain(lineItems, costs);
+      const cogsGift     = orderCogsGift(lineItems, costs);
       const giftLabel    = orderGiftLabel(lineItems);
       const soldLabel    = orderSoldLabel(lineItems);
       const productKey   = orderProductKey(lineItems);
@@ -283,7 +284,7 @@ type RestOrder = {
   line_items: RestLineItem[];
 };
 
-function parseRestOrder(o: RestOrder): Order {
+function parseRestOrder(o: RestOrder, costs?: UnitCosts): Order {
   const lineItems: LineItem[] = o.line_items.map((li) => ({
     title: li.title,
     variantTitle: li.variant_title,
@@ -300,9 +301,9 @@ function parseRestOrder(o: RestOrder): Order {
   const refundedTotal = Math.max(0, totalPrice - netPrice);
   const countryCode   = o.shipping_address?.country_code ?? "FR";
 
-  const cogs         = orderCogs(lineItems);
-  const cogsMain     = orderCogsMain(lineItems);
-  const cogsGift     = orderCogsGift(lineItems);
+  const cogs         = orderCogs(lineItems, costs);
+  const cogsMain     = orderCogsMain(lineItems, costs);
+  const cogsGift     = orderCogsGift(lineItems, costs);
   const giftLabel    = orderGiftLabel(lineItems);
   const soldLabel    = orderSoldLabel(lineItems);
   const productKey   = orderProductKey(lineItems);
@@ -344,7 +345,7 @@ function parseRestOrder(o: RestOrder): Order {
   };
 }
 
-async function fetchOrdersREST(session: { shop: string; accessToken: string }): Promise<Order[]> {
+async function fetchOrdersREST(session: { shop: string; accessToken: string }, costs?: UnitCosts): Promise<Order[]> {
   const all: Order[] = [];
   // status=any inclut open + cancelled + archived; order=id+asc pour cohérence
   let url: string | null =
@@ -365,7 +366,7 @@ async function fetchOrdersREST(session: { shop: string; accessToken: string }): 
     const json = await resp.json() as { orders?: RestOrder[] };
     const raw  = json.orders ?? [];
 
-    for (const o of raw) all.push(parseRestOrder(o));
+    for (const o of raw) all.push(parseRestOrder(o, costs));
 
     // Pagination via Link header
     const link: string              = resp.headers.get("Link") ?? "";
@@ -387,10 +388,11 @@ function buildManualOrder(
   netPrice: number,
   countryCode: string,
   lineItems: LineItem[],
+  costs?: UnitCosts,
 ): Order {
-  const cogs         = orderCogs(lineItems);
-  const cogsMain     = orderCogsMain(lineItems);
-  const cogsGift     = orderCogsGift(lineItems);
+  const cogs         = orderCogs(lineItems, costs);
+  const cogsMain     = orderCogsMain(lineItems, costs);
+  const cogsGift     = orderCogsGift(lineItems, costs);
   const giftLabel    = orderGiftLabel(lineItems);
   const soldLabel    = orderSoldLabel(lineItems);
   const productKey   = orderProductKey(lineItems);
@@ -398,91 +400,89 @@ function buildManualOrder(
   const paymentFees  = netPrice * 0.015;
   const margin       = netPrice - cogs - realShipping - paymentFees;
   return {
-    id,
-    name,
-    createdAt,
-    customerName,
-    customerEmail: "",
-    countryCode,
+    id, name, createdAt, customerName,
+    customerEmail: "", countryCode,
     country: countryCode === "FR" ? "France" : countryCode,
-    totalPrice:   netPrice,
-    subtotalPrice: netPrice,
-    shippingPrice: 0,
-    discountTotal: 0,
-    refundedTotal: 0,
-    paymentGateway: "",
-    lineItems,
-    fulfillmentStatus: "FULFILLED",
-    financialStatus: "PAID",
-    cancelledAt: null,
-    closed: false,
-    test: false,
-    source: "manuel",
-    cogs,
-    cogsMain,
-    cogsGift,
-    giftLabel,
-    soldLabel,
-    productKey,
-    realShipping,
-    paymentFees,
-    netPrice,
-    margin,
+    totalPrice: netPrice, subtotalPrice: netPrice,
+    shippingPrice: 0, discountTotal: 0, refundedTotal: 0,
+    paymentGateway: "", lineItems,
+    fulfillmentStatus: "FULFILLED", financialStatus: "PAID",
+    cancelledAt: null, closed: false, test: false, source: "manuel",
+    cogs, cogsMain, cogsGift, giftLabel, soldLabel, productKey,
+    realShipping, paymentFees, netPrice, margin,
   };
 }
 
-// Règles bundle Laya :
-//   69,90 € → 3 pots + bol offert  (kit = {pots:3, bols:1})
-//   28,90 € → 1 pot + cuillère offerte
-// Titres choisis pour que parseUgcProduit détecte correctement les composants
-// ("Bol" seul, sans "laya", pour éviter la détection parasite d'un pot)
-const MANUAL_ORDERS: Order[] = [
-  buildManualOrder("manual-1001", "#1001", "2026-03-02T12:00:00.000Z", "Samir Aouina",    69.90, "FR", [
-    { title: "3 pots",   variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
-    { title: "Bol",      variantTitle: null, quantity: 1, unitPrice: 0,     sku: null },
-  ]),
-  buildManualOrder("manual-1002", "#1002", "2026-03-04T12:00:00.000Z", "Imane",           69.90, "FR", [
-    { title: "3 pots",   variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
-    { title: "Bol",      variantTitle: null, quantity: 1, unitPrice: 0,     sku: null },
-  ]),
-  buildManualOrder("manual-1003", "#1003", "2026-03-07T12:00:00.000Z", "Julie Galissard", 28.90, "FR", [
-    { title: "1 pot",    variantTitle: null, quantity: 1, unitPrice: 28.90, sku: null },
-    { title: "Cuillère", variantTitle: null, quantity: 1, unitPrice: 0,     sku: null },
-  ]),
-];
+// Bundle cadeau Laya : règle applicable uniquement à partir de #1018.
+// #1001–#1003 : commandes sans cadeau (politique non encore en vigueur).
+function buildManualOrdersList(costs?: UnitCosts): Order[] {
+  return [
+    buildManualOrder("manual-1001", "#1001", "2026-03-02T12:00:00.000Z", "Samir Aouina",    69.90, "FR", [
+      { title: "3 pots", variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
+    ], costs),
+    buildManualOrder("manual-1002", "#1002", "2026-03-04T12:00:00.000Z", "Imane",           69.90, "FR", [
+      { title: "3 pots", variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
+    ], costs),
+    buildManualOrder("manual-1003", "#1003", "2026-03-07T12:00:00.000Z", "Julie Galissard", 28.90, "FR", [
+      { title: "1 pot",  variantTitle: null, quantity: 1, unitPrice: 28.90, sku: null },
+    ], costs),
+  ];
+}
 
-function mergeManualOrders(shopifyOrders: Order[]): Order[] {
+function mergeManualOrders(shopifyOrders: Order[], manualOrders: Order[]): Order[] {
   const existingNames = new Set(shopifyOrders.map((o) => o.name));
-  const toAdd = MANUAL_ORDERS.filter((m) => !existingNames.has(m.name));
+  const toAdd = manualOrders.filter((m) => !existingNames.has(m.name));
   if (toAdd.length === 0) return shopifyOrders;
-  const merged = [...shopifyOrders, ...toAdd];
-  return merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return [...shopifyOrders, ...toAdd].sort((a, b) =>
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
+
+function computeUnitCostsFromStock(
+  achats: { composant: string; quantite: number; prixUnitaire: number }[]
+): UnitCosts {
+  const g: Record<string, { qty: number; cost: number }> = {};
+  for (const a of achats) {
+    if (!g[a.composant]) g[a.composant] = { qty: 0, cost: 0 };
+    g[a.composant].qty  += a.quantite;
+    g[a.composant].cost += a.quantite * a.prixUnitaire;
+  }
+  const avg = (k: string, fb: number) => (g[k]?.qty > 0 ? g[k].cost / g[k].qty : fb);
+  return {
+    pot:      avg("pot",      DEFAULT_COSTS.pot),
+    fouet:    avg("fouet",    DEFAULT_COSTS.fouet),
+    bol:      avg("bol",      DEFAULT_COSTS.bol),
+    cuillere: avg("cuillere", DEFAULT_COSTS.cuillere),
+  };
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { admin, session } = await authenticate.admin(request) as any;
   const sess = session as { shop: string; accessToken: string };
 
+  // 0. Coûts unitaires depuis les achats stock (fallback = valeurs par défaut)
+  const stockAchats = await prisma.stockAchat.findMany();
+  const unitCosts = computeUnitCostsFromStock(stockAchats);
+
   let orders: Order[] = [];
   let fetchError: string | null = null;
 
   // 1. REST primary (status=any)
   try {
-    orders = await fetchOrdersREST(sess);
+    orders = await fetchOrdersREST(sess, unitCosts);
   } catch (e) {
     // Fallback GraphQL
     try {
-      orders = await fetchAllOrders(admin);
+      orders = await fetchAllOrders(admin, unitCosts);
     } catch (e2) {
       fetchError = String(e2);
     }
   }
 
   // 2. Merge manual orders (deduplicated by name)
-  orders = mergeManualOrders(orders);
+  orders = mergeManualOrders(orders, buildManualOrdersList(unitCosts));
 
   const [rawExpenses, creators] = await Promise.all([
     prisma.expense.findMany({ orderBy: { date: "desc" } }),
