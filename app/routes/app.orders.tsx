@@ -343,7 +343,6 @@ async function fetchOrdersREST(session: { shop: string; accessToken: string }): 
 
 // ─── Fetch par ID (diagnostic + force-récupération) ──────────────────────────
 
-// IDs connus manquants — à compléter quand l'utilisateur fournit #1002 et #1003
 const FORCED_ORDER_IDS: string[] = [
   "12681351856512", // #1001
   "12685418529152", // #1002
@@ -414,9 +413,11 @@ async function forceInjectMissingOrders(
 
   if (injected.length === 0) return orders;
 
-  // Réinsérer en ordre chronologique
-  return [...injected, ...orders].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  // Merge + déduplique par id + tri décroissant (plus récent en premier)
+  const merged = new Map<string, Order>();
+  for (const o of [...orders, ...injected]) merged.set(o.id, o);
+  return [...merged.values()].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 }
 
