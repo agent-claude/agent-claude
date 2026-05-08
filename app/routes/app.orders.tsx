@@ -197,8 +197,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   try {
     orders = await fetchAllOrders(admin);
+    console.log(
+      "ORDERS FETCHED",
+      orders.length,
+      orders.map((o) => ({ name: o.name, date: o.createdAt.slice(0, 10), financial: o.financialStatus, fulfillment: o.fulfillmentStatus })),
+    );
   } catch (e) {
     fetchError = String(e);
+    console.error("ORDERS FETCH ERROR", e);
   }
 
   const [rawExpenses, creators] = await Promise.all([
@@ -333,21 +339,29 @@ export default function OrdersPage() {
   const expenseFetcher = useFetcher();
 
   // Filters
-  const [period, setPeriod]       = useState("30j");
+  const [period, setPeriod]       = useState("tout");
   const [country, setCountry]     = useState("");
   const [finStatus, setFinStatus] = useState("");
   const [fulStatus, setFulStatus] = useState("");
   const [showAll, setShowAll]     = useState(false);
 
-  // Filter orders
+  // Filter orders — each exclusion tracked separately for the debug bar
   const cutoff = periodCutoff(period);
+  const excludedByPeriod  = cutoff ? orders.filter((o) => new Date(o.createdAt) < cutoff) : [];
+  const afterPeriod       = cutoff ? orders.filter((o) => new Date(o.createdAt) >= cutoff) : orders;
+  const excludedByCountry = country   ? afterPeriod.filter((o) => o.countryCode     !== country)   : [];
+  const excludedByFin     = finStatus ? afterPeriod.filter((o) => o.financialStatus !== finStatus) : [];
+  const excludedByFul     = fulStatus ? afterPeriod.filter((o) => o.fulfillmentStatus !== fulStatus) : [];
+
   const filtered = orders.filter((o) => {
     if (cutoff && new Date(o.createdAt) < cutoff) return false;
-    if (country   && o.countryCode      !== country)   return false;
-    if (finStatus && o.financialStatus  !== finStatus) return false;
+    if (country   && o.countryCode       !== country)   return false;
+    if (finStatus && o.financialStatus   !== finStatus) return false;
     if (fulStatus && o.fulfillmentStatus !== fulStatus) return false;
     return true;
   });
+
+  const totalExcluded = orders.length - filtered.length;
 
   // Filter expenses by period
   const filteredExpenses = expenses.filter((e) => {
@@ -430,6 +444,25 @@ export default function OrdersPage() {
             Erreur de chargement des commandes Shopify : {fetchError}
           </div>
         )}
+
+        {/* Debug / compteur */}
+        <div style={{ background: "#f8fafc", border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 16px", marginBottom: 14, fontSize: 12, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontWeight: 700, color: T.text }}>Shopify : {orders.length} commande{orders.length > 1 ? "s" : ""} récupérée{orders.length > 1 ? "s" : ""}</span>
+          <span style={{ color: T.green, fontWeight: 600 }}>Affichées : {filtered.length}</span>
+          {totalExcluded > 0 && (
+            <span style={{ color: T.orange, fontWeight: 600 }}>Masquées par filtres : {totalExcluded}</span>
+          )}
+          {excludedByPeriod.length > 0 && (
+            <span style={{ color: T.muted }}>
+              Période ({period}) : {excludedByPeriod.length} cachée{excludedByPeriod.length > 1 ? "s" : ""} —{" "}
+              <span style={{ color: T.orange }}>{excludedByPeriod.slice(0, 8).map((o) => o.name).join(", ")}{excludedByPeriod.length > 8 ? "…" : ""}</span>
+            </span>
+          )}
+          {excludedByCountry.length > 0 && <span style={{ color: T.muted }}>Pays : {excludedByCountry.length} cachée{excludedByCountry.length > 1 ? "s" : ""}</span>}
+          {excludedByFin.length > 0     && <span style={{ color: T.muted }}>Paiement : {excludedByFin.length} cachée{excludedByFin.length > 1 ? "s" : ""}</span>}
+          {excludedByFul.length > 0     && <span style={{ color: T.muted }}>Livraison : {excludedByFul.length} cachée{excludedByFul.length > 1 ? "s" : ""}</span>}
+          {orders.length === 0 && !fetchError && <span style={{ color: T.red, fontWeight: 600 }}>Aucune commande reçue de Shopify — voir logs Render</span>}
+        </div>
 
         {/* Filters */}
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 18px", marginBottom: 20, boxShadow: T.shadow }}>
