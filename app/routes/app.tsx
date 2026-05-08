@@ -23,6 +23,7 @@ export default function AppLayout() {
     <AppProvider embedded apiKey={apiKey}>
       <ui-nav-menu>
         <a href="/app" rel="home">Dashboard</a>
+        <a href="/app/orders">Commandes & Renta</a>
         <a href="/app/ugc">UGC & Collabs</a>
         <a href="/app/recettes">Livret Recettes</a>
         <a href="/app/produits-offerts">Produits offerts</a>
