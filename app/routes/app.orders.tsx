@@ -33,6 +33,9 @@ type Order = {
   lineItems: LineItem[];
   fulfillmentStatus: string;
   financialStatus: string;
+  cancelledAt: string | null;
+  closed: boolean;
+  test: boolean;
   cogs: number;
   realShipping: number;
   paymentFees: number;
@@ -72,9 +75,10 @@ function orderRealShipping(countryCode: string, items: LineItem[]): number {
 
 // ─── GraphQL ──────────────────────────────────────────────────────────────────
 
+// status:any inclut open + cancelled + archived
 const ORDERS_QUERY = `
   query GetOrders($cursor: String) {
-    orders(first: 250, after: $cursor, sortKey: CREATED_AT, reverse: true) {
+    orders(first: 250, after: $cursor, query: "status:any", sortKey: CREATED_AT, reverse: true) {
       edges {
         node {
           id
@@ -82,6 +86,9 @@ const ORDERS_QUERY = `
           createdAt
           displayFinancialStatus
           displayFulfillmentStatus
+          cancelledAt
+          closed
+          test
           customer { firstName lastName email }
           shippingAddress { country countryCodeV2 }
           totalPriceSet            { shopMoney { amount } }
@@ -171,6 +178,9 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
         lineItems,
         fulfillmentStatus: String(n.displayFulfillmentStatus ?? ""),
         financialStatus:   String(n.displayFinancialStatus   ?? ""),
+        cancelledAt:  n.cancelledAt ? String(n.cancelledAt) : null,
+        closed:       Boolean(n.closed),
+        test:         Boolean(n.test),
         cogs,
         realShipping,
         paymentFees,
@@ -187,49 +197,48 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
   return all;
 }
 
-// ─── Loader ───────────────────────────────────────────────────────────────────
+// ─── Diagnostic complet ───────────────────────────────────────────────────────
 
-// ─── Debug query ciblée ───────────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function runDiagnostics(admin: any) {
+  type DiagNode = { name: string; cancelledAt: string | null; closed: boolean; test: boolean; displayFinancialStatus: string };
 
-const DEBUG_QUERY = `
-  query DebugOrders($q: String!) {
-    orders(first: 10, query: $q) {
-      edges {
-        node {
-          id
-          name
-          createdAt
-          displayFinancialStatus
-          displayFulfillmentStatus
-          cancelledAt
-          closed
-          test
-          currentTotalPriceSet { shopMoney { amount currencyCode } }
-        }
-      }
+  async function gql(q: string): Promise<{ names: string[]; count: number; errors: unknown }> {
+    try {
+      const resp = await admin.graphql(q);
+      const json = await resp.json() as { data?: { orders?: { edges: { node: DiagNode }[] } }; errors?: unknown };
+      const edges = json.data?.orders?.edges ?? [];
+      return {
+        names: edges.map((e) => `${e.node.name}${e.node.cancelledAt ? "[annulée]" : ""}${e.node.closed ? "[closed]" : ""}${e.node.test ? "[test]" : ""}`),
+        count: edges.length,
+        errors: json.errors ?? null,
+      };
+    } catch (e) {
+      return { names: [], count: -1, errors: String(e) };
     }
   }
-`;
 
-async function debugFetchTargetOrders(admin: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-  const queries = [
-    "name:#1001 OR name:#1002 OR name:#1003",
-    "#1001",
-    "1001",
-    "name:1001",
+  const FIELDS = `id name createdAt displayFinancialStatus displayFulfillmentStatus cancelledAt closed test currentTotalPriceSet { shopMoney { amount } }`;
+
+  const tests: [string, string][] = [
+    ["name:1001",                     `{ orders(first:10, query:"name:1001")                     { edges { node { ${FIELDS} } } } }`],
+    ["name:#1001",                    `{ orders(first:10, query:"name:%231001")                  { edges { node { ${FIELDS} } } } }`],
+    ["1001 (texte libre)",            `{ orders(first:10, query:"1001")                          { edges { node { ${FIELDS} } } } }`],
+    ["test:true",                     `{ orders(first:10, query:"test:true")                     { edges { node { ${FIELDS} } } } }`],
+    ["status:any (tout)",             `{ orders(first:250, query:"status:any")                   { edges { node { ${FIELDS} } } } }`],
+    ["status:cancelled",              `{ orders(first:10, query:"status:cancelled")              { edges { node { ${FIELDS} } } } }`],
+    ["status:closed",                 `{ orders(first:10, query:"status:closed")                 { edges { node { ${FIELDS} } } } }`],
+    ["financial_status:any",          `{ orders(first:10, query:"financial_status:any")          { edges { node { ${FIELDS} } } } }`],
+    ["created_at:<2026-03-11",        `{ orders(first:10, query:"created_at:<2026-03-11")        { edges { node { ${FIELDS} } } } }`],
+    ["sans sortKey (250 first)",      `{ orders(first:250, query:"status:any", reverse:true)     { edges { node { ${FIELDS} } } } }`],
   ];
 
-  for (const q of queries) {
-    try {
-      const resp = await admin.graphql(DEBUG_QUERY, { variables: { q } });
-      const json = await resp.json() as { data?: { orders?: { edges: unknown[] } }; errors?: unknown };
-      const edges = json.data?.orders?.edges ?? [];
-      console.log(`DEBUG ORDERS query="${q}" → ${edges.length} résultat(s)`, JSON.stringify(edges));
-      if (json.errors) console.error(`DEBUG ORDERS errors query="${q}"`, JSON.stringify(json.errors));
-    } catch (e) {
-      console.error(`DEBUG ORDERS exception query="${q}"`, e);
-    }
+  console.log("=== DIAGNOSTIC ORDERS START ===");
+  for (const [label, query] of tests) {
+    const res = await gql(query);
+    console.log(`DIAG [${label}] → ${res.count} commande(s) : ${res.names.join(", ") || "(aucune)"}${res.errors ? ` | ERRORS: ${JSON.stringify(res.errors)}` : ""}`);
   }
+  console.log("=== DIAGNOSTIC ORDERS END ===");
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -240,8 +249,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let orders: Order[] = [];
   let fetchError: string | null = null;
 
-  // Debug ciblé #1001-#1003 (toujours actif, logs côté Render)
-  await debugFetchTargetOrders(admin);
+  // Diagnostics complets — résultats dans les logs Render
+  await runDiagnostics(admin);
 
   try {
     orders = await fetchAllOrders(admin);
@@ -393,6 +402,8 @@ export default function OrdersPage() {
   const { orders, expenses, ugcStats, fetchError } = useLoaderData<typeof loader>();
   const expenseFetcher = useFetcher();
 
+  const [debugSearch, setDebugSearch] = useState("");
+
   // Filters
   const [period, setPeriod]       = useState("tout");
   const [country, setCountry]     = useState("");
@@ -417,6 +428,10 @@ export default function OrdersPage() {
   });
 
   const totalExcluded = orders.length - filtered.length;
+
+  const debugOrders = debugSearch.trim()
+    ? orders.filter((o) => o.name.toLowerCase().includes(debugSearch.toLowerCase()) || o.customerName.toLowerCase().includes(debugSearch.toLowerCase()))
+    : orders;
 
   // Filter expenses by period
   const filteredExpenses = expenses.filter((e) => {
@@ -521,23 +536,36 @@ export default function OrdersPage() {
 
         {/* ── DEBUG TABLE : toutes les commandes brutes, sans aucun filtre ── */}
         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: "14px 18px", marginBottom: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#92400e", marginBottom: 10, letterSpacing: "0.07em" }}>
-            DEBUG — {orders.length} commande{orders.length !== 1 ? "s" : ""} brutes reçues de Shopify (aucun filtre)
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#92400e", letterSpacing: "0.07em" }}>
+              DEBUG — {orders.length} commande{orders.length !== 1 ? "s" : ""} brutes Shopify (query: status:any, aucun filtre UI)
+            </span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "#78350f" }}>Chercher :</span>
+              <input
+                value={debugSearch}
+                onChange={(e) => setDebugSearch(e.target.value)}
+                placeholder="#1001 ou nom…"
+                style={{ fontSize: 11, padding: "3px 8px", border: "1px solid #fde68a", borderRadius: 6, background: "#fffde7", width: 130 }}
+              />
+            </div>
           </div>
           {orders.length === 0 ? (
-            <p style={{ margin: 0, fontSize: 12, color: "#92400e" }}>Shopify n'a renvoyé aucune commande. Vérifier les logs Render pour la query debug #1001-#1003.</p>
+            <p style={{ margin: 0, fontSize: 12, color: "#92400e" }}>
+              Shopify n'a renvoyé aucune commande. Voir logs Render (=== DIAGNOSTIC ORDERS ===) pour identifier la cause.
+            </p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                 <thead>
                   <tr style={{ background: "#fef3c7" }}>
-                    {["N°", "Date", "Pays", "Total", "Net (après remb.)", "Paiement", "Livraison", "Produits"].map((h) => (
+                    {["N°", "Date", "Pays", "Total orig.", "Net actuel", "Paiement", "Livraison", "Annulée", "Archivée", "Test", "Produits"].map((h) => (
                       <th key={h} style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#78350f", whiteSpace: "nowrap", borderBottom: "1px solid #fde68a" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.map((o, i) => (
+                  {debugOrders.map((o, i) => (
                     <tr key={o.id} style={{ background: i % 2 === 0 ? "#fffde7" : "#fffbeb", borderTop: "1px solid #fde68a" }}>
                       <td style={{ padding: "4px 8px", fontWeight: 700, color: "#92400e" }}>{o.name}</td>
                       <td style={{ padding: "4px 8px", color: "#78350f", whiteSpace: "nowrap" }}>{new Date(o.createdAt).toLocaleDateString("fr-FR")}</td>
@@ -546,7 +574,16 @@ export default function OrdersPage() {
                       <td style={{ padding: "4px 8px", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(o.netPrice)}</td>
                       <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{o.financialStatus || "—"}</td>
                       <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{o.fulfillmentStatus || "—"}</td>
-                      <td style={{ padding: "4px 8px", color: "#78350f", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: "4px 8px" }}>
+                        {o.cancelledAt ? <span style={{ color: "#dc2626", fontWeight: 700 }}>OUI {new Date(o.cancelledAt).toLocaleDateString("fr-FR")}</span> : <span style={{ color: "#78350f" }}>non</span>}
+                      </td>
+                      <td style={{ padding: "4px 8px" }}>
+                        {o.closed ? <span style={{ color: "#d97706", fontWeight: 700 }}>OUI</span> : <span style={{ color: "#78350f" }}>non</span>}
+                      </td>
+                      <td style={{ padding: "4px 8px" }}>
+                        {o.test ? <span style={{ color: "#6366f1", fontWeight: 700 }}>TEST</span> : <span style={{ color: "#78350f" }}>non</span>}
+                      </td>
+                      <td style={{ padding: "4px 8px", color: "#78350f", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {o.lineItems.map((li) => `${li.quantity}× ${li.title}`).join(", ") || "—"}
                       </td>
                     </tr>
