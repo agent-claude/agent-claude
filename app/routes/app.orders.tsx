@@ -390,16 +390,28 @@ async function fetchOrderByIdREST(
   return parseRestOrder(o);
 }
 
+type InjectStats = {
+  beforeCount: number;
+  afterCount: number;
+  injectedNames: string[];
+  skippedIds: string[];
+  failedIds: string[];
+};
+
 async function forceInjectMissingOrders(
   session: { shop: string; accessToken: string },
   orders: Order[],
-): Promise<Order[]> {
+): Promise<{ orders: Order[]; stats: InjectStats }> {
+  const beforeCount = orders.length;
   const existingIds = new Set(orders.map((o) => o.id));
   const injected: Order[] = [];
+  const skippedIds: string[] = [];
+  const failedIds: string[] = [];
 
   for (const id of FORCED_ORDER_IDS) {
     if (existingIds.has(id)) {
       console.log(`FORCE-INJECT ${id} — déjà présent, skip`);
+      skippedIds.push(id);
       continue;
     }
     const order = await fetchOrderByIdREST(session, id);
@@ -407,18 +419,31 @@ async function forceInjectMissingOrders(
       injected.push(order);
       console.log(`FORCE-INJECT ${id} → injecté (${order.name})`);
     } else {
+      failedIds.push(id);
       console.warn(`FORCE-INJECT ${id} → introuvable ou inaccessible`);
     }
   }
 
-  if (injected.length === 0) return orders;
+  let result = orders;
+  if (injected.length > 0) {
+    // Merge + déduplique par id + tri décroissant (plus récent en premier)
+    const merged = new Map<string, Order>();
+    for (const o of [...orders, ...injected]) merged.set(o.id, o);
+    result = [...merged.values()].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  }
 
-  // Merge + déduplique par id + tri décroissant (plus récent en premier)
-  const merged = new Map<string, Order>();
-  for (const o of [...orders, ...injected]) merged.set(o.id, o);
-  return [...merged.values()].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
+  return {
+    orders: result,
+    stats: {
+      beforeCount,
+      afterCount: result.length,
+      injectedNames: injected.map((o) => o.name),
+      skippedIds,
+      failedIds,
+    },
+  };
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -431,6 +456,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let orders: Order[] = [];
   let fetchError: string | null = null;
   let source = "rest";
+  let injectStats: InjectStats = { beforeCount: 0, afterCount: 0, injectedNames: [], skippedIds: [], failedIds: [] };
 
   // 1. Liste complète via REST (status=any)
   try {
@@ -452,7 +478,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // 3. Force-injection des IDs connus manquants
   try {
-    orders = await forceInjectMissingOrders(sess, orders);
+    const result = await forceInjectMissingOrders(sess, orders);
+    orders      = result.orders;
+    injectStats = result.stats;
   } catch (e) {
     console.error("FORCE-INJECT ERROR", e);
   }
@@ -482,7 +510,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     total:    creators.reduce((s, c) => s + (c.coutTotalCollab ?? 0), 0),
   };
 
-  return { orders, expenses, ugcStats, fetchError };
+  return { orders, expenses, ugcStats, fetchError, injectStats };
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -587,7 +615,7 @@ function periodCutoff(period: string): Date | null {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OrdersPage() {
-  const { orders, expenses, ugcStats, fetchError } = useLoaderData<typeof loader>();
+  const { orders, expenses, ugcStats, fetchError, injectStats } = useLoaderData<typeof loader>();
   const expenseFetcher = useFetcher();
 
   const [debugSearch, setDebugSearch] = useState("");
@@ -683,6 +711,30 @@ export default function OrdersPage() {
   return (
     <div style={{ minHeight: "100vh", background: T.bg, padding: "32px 24px 60px", fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', boxSizing: "border-box" }}>
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+
+        {/* ══════ FORCE INJECT VERSION ACTIVE ══════ */}
+        <div style={{ background: "#7c3aed", color: "#fff", borderRadius: 14, padding: "16px 20px", marginBottom: 20, fontFamily: "monospace" }}>
+          <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.05em", marginBottom: 10 }}>
+            ⚡ FORCE INJECT VERSION ACTIVE ⚡
+          </div>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 13 }}>
+            <span>Avant injection : <strong>{injectStats.beforeCount}</strong> commandes</span>
+            <span>Après injection : <strong>{injectStats.afterCount}</strong> commandes</span>
+            <span>
+              Injectées ({injectStats.injectedNames.length}) :{" "}
+              <strong>{injectStats.injectedNames.length > 0 ? injectStats.injectedNames.join(", ") : "aucune"}</strong>
+            </span>
+            {injectStats.skippedIds.length > 0 && (
+              <span style={{ color: "#c4b5fd" }}>Déjà présentes : {injectStats.skippedIds.length}</span>
+            )}
+            {injectStats.failedIds.length > 0 && (
+              <span style={{ color: "#fca5a5" }}>Échec fetch : {injectStats.failedIds.join(", ")}</span>
+            )}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: "#c4b5fd" }}>
+            IDs forcés : {["12681351856512 (#1001)", "12685418529152 (#1002)", "12700950102400 (#1003)"].join(" · ")}
+          </div>
+        </div>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28, flexWrap: "wrap", gap: 8 }}>
