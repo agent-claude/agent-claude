@@ -75,10 +75,10 @@ function orderRealShipping(countryCode: string, items: LineItem[]): number {
 
 // ─── GraphQL ──────────────────────────────────────────────────────────────────
 
-// status:any inclut open + cancelled + archived
+// Pas de filtre "query:" — status:any n'est pas valide en GQL et tronque les résultats
 const ORDERS_QUERY = `
   query GetOrders($cursor: String) {
-    orders(first: 250, after: $cursor, query: "status:any", sortKey: CREATED_AT, reverse: true) {
+    orders(first: 250, after: $cursor, sortKey: CREATED_AT, reverse: true) {
       edges {
         node {
           id
@@ -121,11 +121,29 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
   let hasNext = true;
   let pages = 0;
 
+  console.log("ORDERS PAGINATION START");
+
   while (hasNext && pages < 20) {
     const resp = await admin.graphql(ORDERS_QUERY, { variables: { cursor } });
-    const json = await resp.json() as { data?: { orders?: { edges: { node: unknown }[]; pageInfo: { hasNextPage: boolean; endCursor: string } } } };
+    const json = await resp.json() as {
+      data?: { orders?: { edges: { node: unknown }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } };
+      errors?: unknown;
+    };
+
+    if (json.errors) {
+      console.error(`ORDERS PAGE ${pages + 1} GRAPHQL ERRORS`, JSON.stringify(json.errors));
+    }
+
     const page = json.data?.orders;
-    if (!page) break;
+    if (!page) {
+      console.error(`ORDERS PAGE ${pages + 1} — data.orders absent`, JSON.stringify(json));
+      break;
+    }
+
+    const names = page.edges.map((e) => (e.node as { name?: string }).name ?? "?");
+    console.log(
+      `ORDERS PAGE ${pages + 1}: ${page.edges.length} commandes [${names.join(", ")}] | hasNextPage=${page.pageInfo.hasNextPage} | endCursor=${page.pageInfo.endCursor ?? "null"}`,
+    );
 
     for (const { node } of page.edges) {
       const n = node as Record<string, unknown>;
@@ -190,10 +208,11 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
     }
 
     hasNext = page.pageInfo.hasNextPage;
-    cursor  = page.pageInfo.endCursor;
+    cursor  = page.pageInfo.endCursor ?? null;
     pages++;
   }
 
+  console.log(`ORDERS PAGINATION END — total récupéré : ${all.length} commandes [${all.map((o) => o.name).join(", ")}]`);
   return all;
 }
 
@@ -249,23 +268,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let orders: Order[] = [];
   let fetchError: string | null = null;
 
-  // Diagnostics complets — résultats dans les logs Render
-  await runDiagnostics(admin);
-
   try {
     orders = await fetchAllOrders(admin);
-    console.log(
-      "ORDERS FETCHED TOTAL",
-      orders.length,
-      orders.map((o) => ({
-        name: o.name,
-        date: o.createdAt.slice(0, 10),
-        financial: o.financialStatus,
-        fulfillment: o.fulfillmentStatus,
-        total: o.totalPrice,
-        net: o.netPrice,
-      })),
-    );
   } catch (e) {
     fetchError = String(e);
     console.error("ORDERS FETCH ERROR", e);
