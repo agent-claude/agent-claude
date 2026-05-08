@@ -341,24 +341,102 @@ async function fetchOrdersREST(session: { shop: string; accessToken: string }): 
   return all;
 }
 
+// ─── Fetch par ID (diagnostic + force-récupération) ──────────────────────────
+
+// IDs connus manquants — à compléter quand l'utilisateur fournit #1002 et #1003
+const FORCED_ORDER_IDS: string[] = [
+  "12681351856512", // #1001
+];
+
+async function fetchOrderByIdREST(
+  session: { shop: string; accessToken: string },
+  id: string,
+): Promise<Order | null> {
+  const url = `https://${session.shop}/admin/api/2026-07/orders/${id}.json`;
+  console.log(`REST BY-ID fetch → ${url}`);
+
+  const resp: Response = await fetch(url, {
+    headers: {
+      "X-Shopify-Access-Token": session.accessToken,
+      "Content-Type": "application/json",
+    },
+  });
+
+  const body = await resp.text();
+
+  if (!resp.ok) {
+    console.error(`REST BY-ID ${id} → HTTP ${resp.status}`, body);
+    return null;
+  }
+
+  let json: { order?: RestOrder };
+  try {
+    json = JSON.parse(body) as { order?: RestOrder };
+  } catch {
+    console.error(`REST BY-ID ${id} — JSON parse error`, body);
+    return null;
+  }
+
+  const o = json.order;
+  if (!o) {
+    console.error(`REST BY-ID ${id} — champ "order" absent`, body);
+    return null;
+  }
+
+  console.log(
+    `REST BY-ID ${id} OK → name=${o.name} order_number=${o.order_number} created_at=${o.created_at} financial_status=${o.financial_status}`,
+  );
+  return parseRestOrder(o);
+}
+
+async function forceInjectMissingOrders(
+  session: { shop: string; accessToken: string },
+  orders: Order[],
+): Promise<Order[]> {
+  const existingIds = new Set(orders.map((o) => o.id));
+  const injected: Order[] = [];
+
+  for (const id of FORCED_ORDER_IDS) {
+    if (existingIds.has(id)) {
+      console.log(`FORCE-INJECT ${id} — déjà présent, skip`);
+      continue;
+    }
+    const order = await fetchOrderByIdREST(session, id);
+    if (order) {
+      injected.push(order);
+      console.log(`FORCE-INJECT ${id} → injecté (${order.name})`);
+    } else {
+      console.warn(`FORCE-INJECT ${id} → introuvable ou inaccessible`);
+    }
+  }
+
+  if (injected.length === 0) return orders;
+
+  // Réinsérer en ordre chronologique
+  return [...injected, ...orders].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+}
+
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { admin, session } = await authenticate.admin(request) as any;
+  const sess = session as { shop: string; accessToken: string };
 
   let orders: Order[] = [];
   let fetchError: string | null = null;
   let source = "rest";
 
-  // 1. Essai REST (status=any — récupère TOUTES les commandes)
+  // 1. Liste complète via REST (status=any)
   try {
-    orders = await fetchOrdersREST(session as { shop: string; accessToken: string });
+    orders = await fetchOrdersREST(sess);
   } catch (e) {
     console.error("REST FETCH ERROR", e);
     source = "graphql-fallback";
 
-    // 2. Fallback GraphQL si REST échoue
+    // 2. Fallback GraphQL si REST échoue entièrement
     try {
       orders = await fetchAllOrders(admin);
     } catch (e2) {
@@ -367,7 +445,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
 
-  console.log(`ORDERS SOURCE: ${source} — ${orders.length} commandes`);
+  console.log(`ORDERS SOURCE: ${source} — ${orders.length} commandes avant force-inject`);
+
+  // 3. Force-injection des IDs connus manquants
+  try {
+    orders = await forceInjectMissingOrders(sess, orders);
+  } catch (e) {
+    console.error("FORCE-INJECT ERROR", e);
+  }
+
+  console.log(`ORDERS FINAL: ${orders.length} commandes [${orders.map((o) => o.name).join(", ")}]`);
 
   const [rawExpenses, creators] = await Promise.all([
     prisma.expense.findMany({ orderBy: { date: "desc" } }),
