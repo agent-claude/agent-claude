@@ -4,7 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { parseUgcProduit, coutComps, ugcShippingCost } from "../utils/ugc";
+import { parseUgcProduit, coutComps, ugcShippingCost, compsToKey, PRODUIT_LABELS } from "../utils/ugc";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +38,11 @@ type Order = {
   test: boolean;
   source: "shopify" | "manuel";
   cogs: number;
+  cogsMain: number;
+  cogsGift: number;
+  giftLabel: string;
+  soldLabel: string;
+  productKey: string;
   realShipping: number;
   paymentFees: number;
   netPrice: number;
@@ -72,6 +77,40 @@ function orderRealShipping(countryCode: string, items: LineItem[]): number {
     total.cuilleres += c.cuilleres * item.quantity;
   }
   return ugcShippingCost(countryCode || "FR", total);
+}
+
+function orderCogsMain(items: LineItem[]): number {
+  return orderCogs(items.filter((li) => li.unitPrice > 0.005));
+}
+
+function orderCogsGift(items: LineItem[]): number {
+  return orderCogs(items.filter((li) => li.unitPrice <= 0.005));
+}
+
+function orderGiftLabel(items: LineItem[]): string {
+  return items
+    .filter((li) => li.unitPrice <= 0.005)
+    .map((li) => `${li.quantity > 1 ? `${li.quantity}× ` : ""}${li.title}`)
+    .join(", ");
+}
+
+function orderProductKey(items: LineItem[]): string {
+  const sold = items.filter((li) => li.unitPrice > 0.005);
+  const total = { pots: 0, fouets: 0, bols: 0, cuilleres: 0 };
+  for (const item of sold) {
+    const c = parseUgcProduit(`${item.title} ${item.variantTitle ?? ""}`);
+    total.pots      += c.pots      * item.quantity;
+    total.fouets    += c.fouets    * item.quantity;
+    total.bols      += c.bols      * item.quantity;
+    total.cuilleres += c.cuilleres * item.quantity;
+  }
+  return compsToKey(total) || "autre";
+}
+
+function orderSoldLabel(items: LineItem[]): string {
+  const sold = items.filter((li) => li.unitPrice > 0.005);
+  if (sold.length === 0) return "—";
+  return sold.map((li) => `${li.quantity > 1 ? `${li.quantity}× ` : ""}${li.title}`).join(", ");
 }
 
 // ─── GraphQL ──────────────────────────────────────────────────────────────────
@@ -161,6 +200,11 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
       const countryCode = addr?.countryCodeV2 ?? "FR";
 
       const cogs         = orderCogs(lineItems);
+      const cogsMain     = orderCogsMain(lineItems);
+      const cogsGift     = orderCogsGift(lineItems);
+      const giftLabel    = orderGiftLabel(lineItems);
+      const soldLabel    = orderSoldLabel(lineItems);
+      const productKey   = orderProductKey(lineItems);
       const realShipping = orderRealShipping(countryCode, lineItems);
       const netPrice     = currentTotal;
       const paymentFees  = netPrice * 0.015;
@@ -188,6 +232,11 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
         test:         Boolean(n.test),
         source:       "shopify",
         cogs,
+        cogsMain,
+        cogsGift,
+        giftLabel,
+        soldLabel,
+        productKey,
         realShipping,
         paymentFees,
         netPrice,
@@ -252,6 +301,11 @@ function parseRestOrder(o: RestOrder): Order {
   const countryCode   = o.shipping_address?.country_code ?? "FR";
 
   const cogs         = orderCogs(lineItems);
+  const cogsMain     = orderCogsMain(lineItems);
+  const cogsGift     = orderCogsGift(lineItems);
+  const giftLabel    = orderGiftLabel(lineItems);
+  const soldLabel    = orderSoldLabel(lineItems);
+  const productKey   = orderProductKey(lineItems);
   const realShipping = orderRealShipping(countryCode, lineItems);
   const paymentFees  = netPrice * 0.015;
   const margin       = netPrice - cogs - realShipping - paymentFees;
@@ -278,6 +332,11 @@ function parseRestOrder(o: RestOrder): Order {
     test:         o.test ?? false,
     source:       "shopify" as const,
     cogs,
+    cogsMain,
+    cogsGift,
+    giftLabel,
+    soldLabel,
+    productKey,
     realShipping,
     paymentFees,
     netPrice,
@@ -330,6 +389,11 @@ function buildManualOrder(
   lineItems: LineItem[],
 ): Order {
   const cogs         = orderCogs(lineItems);
+  const cogsMain     = orderCogsMain(lineItems);
+  const cogsGift     = orderCogsGift(lineItems);
+  const giftLabel    = orderGiftLabel(lineItems);
+  const soldLabel    = orderSoldLabel(lineItems);
+  const productKey   = orderProductKey(lineItems);
   const realShipping = orderRealShipping(countryCode, lineItems);
   const paymentFees  = netPrice * 0.015;
   const margin       = netPrice - cogs - realShipping - paymentFees;
@@ -355,6 +419,11 @@ function buildManualOrder(
     test: false,
     source: "manuel",
     cogs,
+    cogsMain,
+    cogsGift,
+    giftLabel,
+    soldLabel,
+    productKey,
     realShipping,
     paymentFees,
     netPrice,
@@ -761,7 +830,7 @@ export default function OrdersPage() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    {["Commande", "Date", "Cliente", "Pays", "Produits", "Total", "Paiement", "Livraison", "COGS", "Port", "Marge"].map((h) => (
+                    {["Commande", "Date", "Cliente", "Pays", "Produit vendu", "Cadeau offert", "Prix payé", "COGS produit", "Coût cadeau", "Port réel", "Frais pmt", "Bénéfice", "Marge %"].map((h) => (
                       <th key={h} style={th}>{h}</th>
                     ))}
                   </tr>
@@ -769,9 +838,7 @@ export default function OrdersPage() {
                 <tbody>
                   {displayOrders.map((o) => {
                     const dateStr = new Date(o.createdAt).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "2-digit" });
-                    const products = o.lineItems.length > 0
-                      ? o.lineItems.map((li) => `${li.quantity > 1 ? `${li.quantity}× ` : ""}${li.title}`).join(", ")
-                      : "—";
+                    const marginPct = o.netPrice > 0 ? (o.margin / o.netPrice) * 100 : 0;
                     return (
                       <tr key={o.id}
                         style={{ borderBottom: `1px solid ${T.border}` }}
@@ -787,26 +854,36 @@ export default function OrdersPage() {
                           )}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted, whiteSpace: "nowrap" }}>{dateStr}</td>
-                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.text, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.text, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {o.customerName}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted }}>{COUNTRY_LABELS[o.countryCode] ?? (o.country || "—")}</td>
-                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {products}
+                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.text, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {o.soldLabel}
+                        </td>
+                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {o.giftLabel || <span style={{ color: T.dim }}>—</span>}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 600, color: T.text, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
-                          {eur(o.totalPrice)}
+                          {eur(o.netPrice)}
                         </td>
-                        <td style={{ padding: "11px 14px" }}><FinancialBadge status={o.financialStatus} /></td>
-                        <td style={{ padding: "11px 14px" }}><FulfillmentBadge status={o.fulfillmentStatus} /></td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.red, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
-                          {o.cogs > 0 ? eur(o.cogs) : <span style={{ color: T.dim }}>—</span>}
+                          {o.cogsMain > 0 ? eur(o.cogsMain) : <span style={{ color: T.dim }}>—</span>}
+                        </td>
+                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.amber, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                          {o.cogsGift > 0 ? eur(o.cogsGift) : <span style={{ color: T.dim }}>—</span>}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.amber, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
                           {o.realShipping > 0 ? eur(o.realShipping) : <span style={{ color: T.dim }}>—</span>}
                         </td>
+                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                          {eur(o.paymentFees)}
+                        </td>
                         <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: o.margin >= 0 ? T.green : T.red, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
                           {eur(o.margin)}
+                        </td>
+                        <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 600, color: marginPct >= 50 ? T.green : marginPct >= 25 ? T.amber : T.red, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                          {pct(marginPct)}
                         </td>
                       </tr>
                     );
@@ -814,16 +891,16 @@ export default function OrdersPage() {
                 </tbody>
                 <tfoot>
                   <tr style={{ background: T.bg, borderTop: `2px solid ${T.border}` }}>
-                    <td colSpan={5} style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.muted }}>
+                    <td colSpan={6} style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.muted }}>
                       Total ({filtered.length})
                     </td>
-                    <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: T.text, fontVariantNumeric: "tabular-nums" }}>{eur(caBrut)}</td>
-                    <td colSpan={2} />
-                    <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totalCogs)}</td>
+                    <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: T.text, fontVariantNumeric: "tabular-nums" }}>{eur(caNet)}</td>
+                    <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(filtered.reduce((s, o) => s + o.cogsMain, 0))}</td>
+                    <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.amber, fontVariantNumeric: "tabular-nums" }}>{eur(filtered.reduce((s, o) => s + o.cogsGift, 0))}</td>
                     <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.amber, fontVariantNumeric: "tabular-nums" }}>{eur(totalShipping)}</td>
-                    <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: benefice >= 0 ? T.green : T.red, fontVariantNumeric: "tabular-nums" }}>
-                      {eur(filtered.reduce((s, o) => s + o.margin, 0))}
-                    </td>
+                    <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(totalPayFees)}</td>
+                    <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: benefice >= 0 ? T.green : T.red, fontVariantNumeric: "tabular-nums" }}>{eur(filtered.reduce((s, o) => s + o.margin, 0))}</td>
+                    <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: margeNette >= 50 ? T.green : margeNette >= 25 ? T.amber : T.red, fontVariantNumeric: "tabular-nums" }}>{pct(margeNette)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -834,6 +911,73 @@ export default function OrdersPage() {
             <p style={{ margin: 0, fontSize: 14, color: T.muted }}>Aucune commande pour cette période.</p>
           </div>
         )}
+
+        {/* ── Rentabilité par produit ──────────────────────────────────────── */}
+        {filtered.length > 0 && (() => {
+          const PRODUCT_RANK = ["pot", "2_pots", "3_pots", "kit_decouverte", "kit_ultime", "pot_bol", "pot_cuillere", "pot_fouet_cuillere", "autre"];
+          type Acc = { count: number; tPrice: number; tCogsMain: number; tCogsGift: number; tShipping: number; tPayFees: number; tMargin: number };
+          const map: Record<string, Acc> = {};
+          for (const o of filtered) {
+            const k = PRODUCT_RANK.includes(o.productKey) ? o.productKey : "autre";
+            if (!map[k]) map[k] = { count: 0, tPrice: 0, tCogsMain: 0, tCogsGift: 0, tShipping: 0, tPayFees: 0, tMargin: 0 };
+            map[k].count++;
+            map[k].tPrice    += o.netPrice;
+            map[k].tCogsMain += o.cogsMain;
+            map[k].tCogsGift += o.cogsGift;
+            map[k].tShipping += o.realShipping;
+            map[k].tPayFees  += o.paymentFees;
+            map[k].tMargin   += o.margin;
+          }
+          const rows = PRODUCT_RANK
+            .filter((k) => map[k]?.count > 0)
+            .map((k) => {
+              const a = map[k];
+              const avgPrice = a.tPrice / a.count;
+              const mPct     = avgPrice > 0 ? (a.tMargin / a.tPrice) * 100 : 0;
+              return { key: k, label: PRODUIT_LABELS[k] ?? k, count: a.count, avgPrice, avgCogsMain: a.tCogsMain / a.count, avgCogsGift: a.tCogsGift / a.count, avgShipping: a.tShipping / a.count, avgPayFees: a.tPayFees / a.count, avgMargin: a.tMargin / a.count, mPct };
+            });
+          if (rows.length === 0) return null;
+          return (
+            <div style={{ ...card, overflow: "hidden", marginBottom: 32 }}>
+              <div style={{ padding: "16px 20px", borderBottom: `1px solid ${T.border}` }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Rentabilité par produit</span>
+                <span style={{ marginLeft: 8, fontSize: 12, color: T.muted }}>moyennes par commande · période sélectionnée</span>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      {["Produit", "Ventes", "Prix moyen", "COGS produit", "Coût cadeau", "Port moyen", "Frais pmt", "Bénéfice moy", "Marge %"].map((h) => (
+                        <th key={h} style={th}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={r.key}
+                        style={{ borderBottom: `1px solid ${T.border}` }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = T.bg; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                      >
+                        <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: T.text, whiteSpace: "nowrap" }}>{r.label}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 12, color: T.muted, textAlign: "right" }}>{r.count}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: T.text, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(r.avgPrice)}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 12, color: T.red, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(r.avgCogsMain)}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 12, color: T.amber, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                          {r.avgCogsGift > 0 ? eur(r.avgCogsGift) : <span style={{ color: T.dim }}>—</span>}
+                        </td>
+                        <td style={{ padding: "11px 16px", fontSize: 12, color: T.amber, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(r.avgShipping)}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 12, color: T.muted, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(r.avgPayFees)}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 700, color: r.avgMargin >= 0 ? T.green : T.red, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(r.avgMargin)}</td>
+                        <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 700, color: r.mPct >= 50 ? T.green : r.mPct >= 25 ? T.amber : T.red, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{pct(r.mPct)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── UGC costs ────────────────────────────────────────────────────── */}
         <div style={{ ...card, padding: "20px 24px", marginBottom: 24 }}>
