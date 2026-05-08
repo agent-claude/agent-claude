@@ -216,64 +216,158 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
   return all;
 }
 
-// ─── Diagnostic complet ───────────────────────────────────────────────────────
+// ─── REST Admin API (fallback complet) ───────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function runDiagnostics(admin: any) {
-  type DiagNode = { name: string; cancelledAt: string | null; closed: boolean; test: boolean; displayFinancialStatus: string };
+type RestLineItem = {
+  title: string;
+  quantity: number;
+  price: string;
+  variant_title: string | null;
+  sku: string | null;
+};
 
-  async function gql(q: string): Promise<{ names: string[]; count: number; errors: unknown }> {
-    try {
-      const resp = await admin.graphql(q);
-      const json = await resp.json() as { data?: { orders?: { edges: { node: DiagNode }[] } }; errors?: unknown };
-      const edges = json.data?.orders?.edges ?? [];
-      return {
-        names: edges.map((e) => `${e.node.name}${e.node.cancelledAt ? "[annulée]" : ""}${e.node.closed ? "[closed]" : ""}${e.node.test ? "[test]" : ""}`),
-        count: edges.length,
-        errors: json.errors ?? null,
-      };
-    } catch (e) {
-      return { names: [], count: -1, errors: String(e) };
+type RestOrder = {
+  id: number;
+  name: string;
+  order_number: number;
+  created_at: string;
+  financial_status: string;
+  fulfillment_status: string | null;
+  cancelled_at: string | null;
+  closed_at: string | null;
+  test: boolean;
+  total_price: string;
+  current_total_price: string;
+  subtotal_price: string;
+  total_discounts: string;
+  total_shipping_price_set?: { shop_money?: { amount: string } };
+  payment_gateway: string | null;
+  customer?: { first_name?: string; last_name?: string; email?: string } | null;
+  shipping_address?: { country?: string; country_code?: string } | null;
+  line_items: RestLineItem[];
+};
+
+function parseRestOrder(o: RestOrder): Order {
+  const lineItems: LineItem[] = o.line_items.map((li) => ({
+    title: li.title,
+    variantTitle: li.variant_title,
+    quantity: li.quantity,
+    unitPrice: parseFloat(li.price),
+    sku: li.sku,
+  }));
+
+  const totalPrice    = parseFloat(o.total_price   ?? "0");
+  const netPrice      = parseFloat(o.current_total_price ?? o.total_price ?? "0");
+  const subtotalPrice = parseFloat(o.subtotal_price ?? "0");
+  const shippingPrice = parseFloat(o.total_shipping_price_set?.shop_money?.amount ?? "0");
+  const discountTotal = parseFloat(o.total_discounts ?? "0");
+  const refundedTotal = Math.max(0, totalPrice - netPrice);
+  const countryCode   = o.shipping_address?.country_code ?? "FR";
+
+  const cogs         = orderCogs(lineItems);
+  const realShipping = orderRealShipping(countryCode, lineItems);
+  const paymentFees  = netPrice * 0.015;
+  const margin       = netPrice - cogs - realShipping - paymentFees;
+
+  return {
+    id:            String(o.id),
+    name:          o.name,
+    createdAt:     o.created_at,
+    customerName:  o.customer ? `${o.customer.first_name ?? ""} ${o.customer.last_name ?? ""}`.trim() || "Invité" : "Invité",
+    customerEmail: o.customer?.email ?? "",
+    countryCode,
+    country:       o.shipping_address?.country ?? "",
+    totalPrice,
+    subtotalPrice,
+    shippingPrice,
+    discountTotal,
+    refundedTotal,
+    paymentGateway: o.payment_gateway ?? "",
+    lineItems,
+    fulfillmentStatus: (o.fulfillment_status ?? "UNFULFILLED").toUpperCase(),
+    financialStatus:   (o.financial_status  ?? "").toUpperCase(),
+    cancelledAt:  o.cancelled_at,
+    closed:       !!o.closed_at,
+    test:         o.test ?? false,
+    cogs,
+    realShipping,
+    paymentFees,
+    netPrice,
+    margin,
+  };
+}
+
+async function fetchOrdersREST(session: { shop: string; accessToken: string }): Promise<Order[]> {
+  const all: Order[] = [];
+  // status=any inclut open + cancelled + archived; order=id+asc pour cohérence
+  let url: string | null =
+    `https://${session.shop}/admin/api/2026-07/orders.json?status=any&limit=250&order=id+asc`;
+  let page = 1;
+
+  console.log("REST FETCH START", url);
+
+  while (url && page <= 20) {
+    const currentUrl: string = url;
+    const resp: Response = await fetch(currentUrl, {
+      headers: {
+        "X-Shopify-Access-Token": session.accessToken,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text();
+      console.error(`REST PAGE ${page} HTTP ${resp.status}`, body);
+      break;
     }
+
+    const json = await resp.json() as { orders?: RestOrder[] };
+    const raw  = json.orders ?? [];
+
+    console.log(
+      `REST PAGE ${page}: ${raw.length} commandes [${raw.map((o) => `${o.name}(#${o.order_number},${o.financial_status}${o.cancelled_at ? ",annulée" : ""}${o.test ? ",test" : ""})`).join(", ")}]`,
+    );
+
+    for (const o of raw) all.push(parseRestOrder(o));
+
+    // Pagination via Link header
+    const link: string              = resp.headers.get("Link") ?? "";
+    const nextMatch: RegExpMatchArray | null = link.match(/<([^>]+)>;\s*rel="next"/);
+    url = nextMatch ? nextMatch[1] : null;
+    page++;
   }
 
-  const FIELDS = `id name createdAt displayFinancialStatus displayFulfillmentStatus cancelledAt closed test currentTotalPriceSet { shopMoney { amount } }`;
-
-  const tests: [string, string][] = [
-    ["name:1001",                     `{ orders(first:10, query:"name:1001")                     { edges { node { ${FIELDS} } } } }`],
-    ["name:#1001",                    `{ orders(first:10, query:"name:%231001")                  { edges { node { ${FIELDS} } } } }`],
-    ["1001 (texte libre)",            `{ orders(first:10, query:"1001")                          { edges { node { ${FIELDS} } } } }`],
-    ["test:true",                     `{ orders(first:10, query:"test:true")                     { edges { node { ${FIELDS} } } } }`],
-    ["status:any (tout)",             `{ orders(first:250, query:"status:any")                   { edges { node { ${FIELDS} } } } }`],
-    ["status:cancelled",              `{ orders(first:10, query:"status:cancelled")              { edges { node { ${FIELDS} } } } }`],
-    ["status:closed",                 `{ orders(first:10, query:"status:closed")                 { edges { node { ${FIELDS} } } } }`],
-    ["financial_status:any",          `{ orders(first:10, query:"financial_status:any")          { edges { node { ${FIELDS} } } } }`],
-    ["created_at:<2026-03-11",        `{ orders(first:10, query:"created_at:<2026-03-11")        { edges { node { ${FIELDS} } } } }`],
-    ["sans sortKey (250 first)",      `{ orders(first:250, query:"status:any", reverse:true)     { edges { node { ${FIELDS} } } } }`],
-  ];
-
-  console.log("=== DIAGNOSTIC ORDERS START ===");
-  for (const [label, query] of tests) {
-    const res = await gql(query);
-    console.log(`DIAG [${label}] → ${res.count} commande(s) : ${res.names.join(", ") || "(aucune)"}${res.errors ? ` | ERRORS: ${JSON.stringify(res.errors)}` : ""}`);
-  }
-  console.log("=== DIAGNOSTIC ORDERS END ===");
+  console.log(`REST FETCH END — total : ${all.length} commandes [${all.map((o) => o.name).join(", ")}]`);
+  return all;
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { admin, session } = await authenticate.admin(request) as any;
 
   let orders: Order[] = [];
   let fetchError: string | null = null;
+  let source = "rest";
 
+  // 1. Essai REST (status=any — récupère TOUTES les commandes)
   try {
-    orders = await fetchAllOrders(admin);
+    orders = await fetchOrdersREST(session as { shop: string; accessToken: string });
   } catch (e) {
-    fetchError = String(e);
-    console.error("ORDERS FETCH ERROR", e);
+    console.error("REST FETCH ERROR", e);
+    source = "graphql-fallback";
+
+    // 2. Fallback GraphQL si REST échoue
+    try {
+      orders = await fetchAllOrders(admin);
+    } catch (e2) {
+      fetchError = String(e2);
+      console.error("GRAPHQL FETCH ERROR", e2);
+    }
   }
+
+  console.log(`ORDERS SOURCE: ${source} — ${orders.length} commandes`);
 
   const [rawExpenses, creators] = await Promise.all([
     prisma.expense.findMany({ orderBy: { date: "desc" } }),
