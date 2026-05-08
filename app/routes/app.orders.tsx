@@ -189,18 +189,73 @@ async function fetchAllOrders(admin: any): Promise<Order[]> {
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
+// ─── Debug query ciblée ───────────────────────────────────────────────────────
+
+const DEBUG_QUERY = `
+  query DebugOrders($q: String!) {
+    orders(first: 10, query: $q) {
+      edges {
+        node {
+          id
+          name
+          createdAt
+          displayFinancialStatus
+          displayFulfillmentStatus
+          cancelledAt
+          closed
+          test
+          currentTotalPriceSet { shopMoney { amount currencyCode } }
+        }
+      }
+    }
+  }
+`;
+
+async function debugFetchTargetOrders(admin: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const queries = [
+    "name:#1001 OR name:#1002 OR name:#1003",
+    "#1001",
+    "1001",
+    "name:1001",
+  ];
+
+  for (const q of queries) {
+    try {
+      const resp = await admin.graphql(DEBUG_QUERY, { variables: { q } });
+      const json = await resp.json() as { data?: { orders?: { edges: unknown[] } }; errors?: unknown };
+      const edges = json.data?.orders?.edges ?? [];
+      console.log(`DEBUG ORDERS query="${q}" → ${edges.length} résultat(s)`, JSON.stringify(edges));
+      if (json.errors) console.error(`DEBUG ORDERS errors query="${q}"`, JSON.stringify(json.errors));
+    } catch (e) {
+      console.error(`DEBUG ORDERS exception query="${q}"`, e);
+    }
+  }
+}
+
+// ─── Loader ───────────────────────────────────────────────────────────────────
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
 
   let orders: Order[] = [];
   let fetchError: string | null = null;
 
+  // Debug ciblé #1001-#1003 (toujours actif, logs côté Render)
+  await debugFetchTargetOrders(admin);
+
   try {
     orders = await fetchAllOrders(admin);
     console.log(
-      "ORDERS FETCHED",
+      "ORDERS FETCHED TOTAL",
       orders.length,
-      orders.map((o) => ({ name: o.name, date: o.createdAt.slice(0, 10), financial: o.financialStatus, fulfillment: o.fulfillmentStatus })),
+      orders.map((o) => ({
+        name: o.name,
+        date: o.createdAt.slice(0, 10),
+        financial: o.financialStatus,
+        fulfillment: o.fulfillmentStatus,
+        total: o.totalPrice,
+        net: o.netPrice,
+      })),
     );
   } catch (e) {
     fetchError = String(e);
@@ -462,6 +517,44 @@ export default function OrdersPage() {
           {excludedByFin.length > 0     && <span style={{ color: T.muted }}>Paiement : {excludedByFin.length} cachée{excludedByFin.length > 1 ? "s" : ""}</span>}
           {excludedByFul.length > 0     && <span style={{ color: T.muted }}>Livraison : {excludedByFul.length} cachée{excludedByFul.length > 1 ? "s" : ""}</span>}
           {orders.length === 0 && !fetchError && <span style={{ color: T.red, fontWeight: 600 }}>Aucune commande reçue de Shopify — voir logs Render</span>}
+        </div>
+
+        {/* ── DEBUG TABLE : toutes les commandes brutes, sans aucun filtre ── */}
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: "14px 18px", marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#92400e", marginBottom: 10, letterSpacing: "0.07em" }}>
+            DEBUG — {orders.length} commande{orders.length !== 1 ? "s" : ""} brutes reçues de Shopify (aucun filtre)
+          </div>
+          {orders.length === 0 ? (
+            <p style={{ margin: 0, fontSize: 12, color: "#92400e" }}>Shopify n'a renvoyé aucune commande. Vérifier les logs Render pour la query debug #1001-#1003.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: "#fef3c7" }}>
+                    {["N°", "Date", "Pays", "Total", "Net (après remb.)", "Paiement", "Livraison", "Produits"].map((h) => (
+                      <th key={h} style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#78350f", whiteSpace: "nowrap", borderBottom: "1px solid #fde68a" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.map((o, i) => (
+                    <tr key={o.id} style={{ background: i % 2 === 0 ? "#fffde7" : "#fffbeb", borderTop: "1px solid #fde68a" }}>
+                      <td style={{ padding: "4px 8px", fontWeight: 700, color: "#92400e" }}>{o.name}</td>
+                      <td style={{ padding: "4px 8px", color: "#78350f", whiteSpace: "nowrap" }}>{new Date(o.createdAt).toLocaleDateString("fr-FR")}</td>
+                      <td style={{ padding: "4px 8px", color: "#78350f" }}>{o.countryCode || "?"}</td>
+                      <td style={{ padding: "4px 8px", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(o.totalPrice)}</td>
+                      <td style={{ padding: "4px 8px", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{eur(o.netPrice)}</td>
+                      <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{o.financialStatus || "—"}</td>
+                      <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{o.fulfillmentStatus || "—"}</td>
+                      <td style={{ padding: "4px 8px", color: "#78350f", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {o.lineItems.map((li) => `${li.quantity}× ${li.title}`).join(", ") || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Filters */}
