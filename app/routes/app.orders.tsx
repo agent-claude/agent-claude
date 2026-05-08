@@ -346,6 +346,8 @@ async function fetchOrdersREST(session: { shop: string; accessToken: string }): 
 // IDs connus manquants — à compléter quand l'utilisateur fournit #1002 et #1003
 const FORCED_ORDER_IDS: string[] = [
   "12681351856512", // #1001
+  "12685418529152", // #1002
+  "12700950102400", // #1003
 ];
 
 async function fetchOrderByIdREST(
