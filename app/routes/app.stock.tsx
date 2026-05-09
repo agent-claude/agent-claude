@@ -4,8 +4,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { parseUgcProduit, DEFAULT_COSTS } from "../utils/ugc";
-import type { UnitCosts } from "../utils/ugc";
+import { parseUgcProduit, keyToComps, DEFAULT_COSTS } from "../utils/ugc";
+import type { Comps, UnitCosts } from "../utils/ugc";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -64,24 +64,29 @@ async function fetchOrdersLineItems(session: { shop: string; accessToken: string
   return all;
 }
 
+function emptyConsumption(): Record<Composant, { sold: number; gifted: number }> {
+  return { pot: { sold: 0, gifted: 0 }, cuillere: { sold: 0, gifted: 0 }, fouet: { sold: 0, gifted: 0 }, bol: { sold: 0, gifted: 0 } };
+}
+
+function addCompsToConsumption(
+  out: Record<Composant, { sold: number; gifted: number }>,
+  comps: Comps,
+  qty: number,
+  kind: "sold" | "gifted",
+) {
+  const add = (comp: Composant, n: number) => { if (n > 0) out[comp][kind] += n; };
+  add("pot",      comps.pots      * qty);
+  add("cuillere", comps.cuilleres * qty);
+  add("fouet",    comps.fouets    * qty);
+  add("bol",      comps.bols      * qty);
+}
+
 function computeConsumption(orderItems: SlimLI[][]): Record<Composant, { sold: number; gifted: number }> {
-  const out: Record<Composant, { sold: number; gifted: number }> = {
-    pot:      { sold: 0, gifted: 0 },
-    cuillere: { sold: 0, gifted: 0 },
-    fouet:    { sold: 0, gifted: 0 },
-    bol:      { sold: 0, gifted: 0 },
-  };
+  const out = emptyConsumption();
   for (const items of orderItems) {
     for (const li of items) {
       const comps = parseUgcProduit(`${li.title} ${li.variantTitle ?? ""}`);
-      const isGift = li.unitPrice <= 0.005;
-      const add = (comp: Composant, n: number) => {
-        if (n > 0) { if (isGift) out[comp].gifted += n; else out[comp].sold += n; }
-      };
-      add("pot",      comps.pots      * li.quantity);
-      add("cuillere", comps.cuilleres * li.quantity);
-      add("fouet",    comps.fouets    * li.quantity);
-      add("bol",      comps.bols      * li.quantity);
+      addCompsToConsumption(out, comps, li.quantity, li.unitPrice <= 0.005 ? "gifted" : "sold");
     }
   }
   return out;
@@ -94,17 +99,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request) as any;
   const sess = session as { shop: string; accessToken: string };
 
-  const achats = await prisma.stockAchat.findMany({ orderBy: { createdAt: "desc" } });
+  const [achats, creators, produitsOfferts] = await Promise.all([
+    prisma.stockAchat.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.creator.findMany({
+      where: { shippingStatus: { not: "refuse" } },
+      select: { produit: true, quantite: true },
+    }),
+    prisma.produitOffert.findMany({ select: { produit: true, quantite: true } }),
+  ]);
   const unitCosts = computeUnitCosts(achats);
 
-  let consumption: ReturnType<typeof computeConsumption> = {
-    pot: { sold: 0, gifted: 0 }, cuillere: { sold: 0, gifted: 0 },
-    fouet: { sold: 0, gifted: 0 }, bol: { sold: 0, gifted: 0 },
-  };
+  let consumption = emptyConsumption();
   try {
     const items = await fetchOrdersLineItems(sess);
     consumption = computeConsumption(items);
   } catch { /* noop */ }
+
+  // Add UGC creators (gifted)
+  for (const c of creators) {
+    addCompsToConsumption(consumption, keyToComps(c.produit, c.quantite), 1, "gifted");
+  }
+  // Add ProduitOffert entries (gifted)
+  for (const p of produitsOfferts) {
+    addCompsToConsumption(consumption, keyToComps(p.produit, p.quantite), 1, "gifted");
+  }
 
   // Purchase totals per composant
   const purchased: Record<string, { qty: number; cost: number }> = {};

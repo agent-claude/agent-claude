@@ -4,8 +4,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { parseUgcProduit, coutComps, ugcShippingCost, compsToKey, PRODUIT_LABELS, DEFAULT_COSTS } from "../utils/ugc";
-import type { UnitCosts } from "../utils/ugc";
+import { parseUgcProduit, coutComps, ugcShippingCost, compsToKey, fmtComps, PRODUIT_LABELS, DEFAULT_COSTS } from "../utils/ugc";
+import type { Comps, UnitCosts } from "../utils/ugc";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +38,7 @@ type Order = {
   closed: boolean;
   test: boolean;
   source: "shopify" | "manuel";
+  configured: boolean;
   cogs: number;
   cogsMain: number;
   cogsGift: number;
@@ -232,6 +233,7 @@ async function fetchAllOrders(admin: any, costs?: UnitCosts): Promise<Order[]> {
         closed:       Boolean(n.closed),
         test:         Boolean(n.test),
         source:       "shopify",
+        configured:   true,
         cogs,
         cogsMain,
         cogsGift,
@@ -332,6 +334,7 @@ function parseRestOrder(o: RestOrder, costs?: UnitCosts): Order {
     closed:       !!o.closed_at,
     test:         o.test ?? false,
     source:       "shopify" as const,
+    configured:   true,
     cogs,
     cogsMain,
     cogsGift,
@@ -380,53 +383,82 @@ async function fetchOrdersREST(session: { shop: string; accessToken: string }, c
 
 // ─── Commandes manuelles (non remontées par l'API Shopify) ───────────────────
 
-function buildManualOrder(
-  id: string,
-  name: string,
-  createdAt: string,
-  customerName: string,
-  netPrice: number,
-  countryCode: string,
-  lineItems: LineItem[],
+const MANUAL_SEEDS = [
+  { name: "#1001", orderDate: "2026-03-02T12:00:00.000Z", customerName: "Samir Aouina",    netPrice: 69.90, countryCode: "FR" },
+  { name: "#1002", orderDate: "2026-03-04T12:00:00.000Z", customerName: "Imane",           netPrice: 69.90, countryCode: "FR" },
+  { name: "#1003", orderDate: "2026-03-07T12:00:00.000Z", customerName: "Julie Galissard", netPrice: 28.90, countryCode: "FR" },
+] as const;
+
+type ManualSeed = typeof MANUAL_SEEDS[number];
+
+function buildConfiguredManualOrder(
+  config: {
+    name: string; orderDate: string; customerName: string; netPrice: number; countryCode: string;
+    nbPots: number; nbFouets: number; nbBols: number; nbCuilleres: number;
+    giftPots: number; giftFouets: number; giftBols: number; giftCuilleres: number;
+    realShippingOverride: number | null;
+  },
   costs?: UnitCosts,
 ): Order {
-  const cogs         = orderCogs(lineItems, costs);
-  const cogsMain     = orderCogsMain(lineItems, costs);
-  const cogsGift     = orderCogsGift(lineItems, costs);
-  const giftLabel    = orderGiftLabel(lineItems);
-  const soldLabel    = orderSoldLabel(lineItems);
-  const productKey   = orderProductKey(lineItems);
-  const realShipping = orderRealShipping(countryCode, lineItems);
-  const paymentFees  = netPrice * 0.015;
-  const margin       = netPrice - cogs - realShipping - paymentFees;
+  const soldComps: Comps = { pots: config.nbPots, fouets: config.nbFouets, bols: config.nbBols, cuilleres: config.nbCuilleres };
+  const giftComps: Comps = { pots: config.giftPots, fouets: config.giftFouets, bols: config.giftBols, cuilleres: config.giftCuilleres };
+  const cogsMain     = coutComps(soldComps, costs);
+  const cogsGift     = coutComps(giftComps, costs);
+  const cogs         = cogsMain + cogsGift;
+  const realShipping = config.realShippingOverride ?? ugcShippingCost(config.countryCode, soldComps);
+  const paymentFees  = config.netPrice * 0.015;
+  const margin       = config.netPrice - cogs - realShipping - paymentFees;
+  const soldLabel    = fmtComps(soldComps) || "—";
+  const giftLabel    = fmtComps(giftComps);
+  const productKey   = compsToKey(soldComps) || "autre";
+  const lineItems: LineItem[] = [];
+  if (soldLabel !== "—") lineItems.push({ title: soldLabel, variantTitle: null, quantity: 1, unitPrice: config.netPrice, sku: null });
+  if (giftLabel)         lineItems.push({ title: giftLabel, variantTitle: null, quantity: 1, unitPrice: 0, sku: null });
   return {
-    id, name, createdAt, customerName,
-    customerEmail: "", countryCode,
-    country: countryCode === "FR" ? "France" : countryCode,
-    totalPrice: netPrice, subtotalPrice: netPrice,
+    id: `manual-${config.name.replace("#", "")}`,
+    name: config.name, createdAt: config.orderDate, customerName: config.customerName,
+    customerEmail: "", countryCode: config.countryCode,
+    country: config.countryCode === "FR" ? "France" : config.countryCode,
+    totalPrice: config.netPrice, subtotalPrice: config.netPrice,
     shippingPrice: 0, discountTotal: 0, refundedTotal: 0,
     paymentGateway: "", lineItems,
     fulfillmentStatus: "FULFILLED", financialStatus: "PAID",
-    cancelledAt: null, closed: false, test: false, source: "manuel",
-    cogs, cogsMain, cogsGift, giftLabel, soldLabel, productKey,
-    realShipping, paymentFees, netPrice, margin,
+    cancelledAt: null, closed: false, test: false, source: "manuel", configured: true,
+    cogs, cogsMain, cogsGift, giftLabel, soldLabel, productKey, realShipping, paymentFees,
+    netPrice: config.netPrice, margin,
   };
 }
 
-// Bundle cadeau Laya : règle applicable uniquement à partir de #1018.
-// #1001–#1003 : commandes sans cadeau (politique non encore en vigueur).
-function buildManualOrdersList(costs?: UnitCosts): Order[] {
-  return [
-    buildManualOrder("manual-1001", "#1001", "2026-03-02T12:00:00.000Z", "Samir Aouina",    69.90, "FR", [
-      { title: "3 pots", variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
-    ], costs),
-    buildManualOrder("manual-1002", "#1002", "2026-03-04T12:00:00.000Z", "Imane",           69.90, "FR", [
-      { title: "3 pots", variantTitle: null, quantity: 1, unitPrice: 69.90, sku: null },
-    ], costs),
-    buildManualOrder("manual-1003", "#1003", "2026-03-07T12:00:00.000Z", "Julie Galissard", 28.90, "FR", [
-      { title: "1 pot",  variantTitle: null, quantity: 1, unitPrice: 28.90, sku: null },
-    ], costs),
-  ];
+function buildUnconfiguredManualOrder(seed: ManualSeed): Order {
+  const paymentFees = seed.netPrice * 0.015;
+  return {
+    id: `manual-${seed.name.replace("#", "")}`,
+    name: seed.name, createdAt: seed.orderDate, customerName: seed.customerName,
+    customerEmail: "", countryCode: seed.countryCode,
+    country: seed.countryCode === "FR" ? "France" : seed.countryCode,
+    totalPrice: seed.netPrice, subtotalPrice: seed.netPrice,
+    shippingPrice: 0, discountTotal: 0, refundedTotal: 0,
+    paymentGateway: "", lineItems: [],
+    fulfillmentStatus: "FULFILLED", financialStatus: "PAID",
+    cancelledAt: null, closed: false, test: false, source: "manuel", configured: false,
+    cogs: 0, cogsMain: 0, cogsGift: 0, giftLabel: "", soldLabel: "Non détaillée", productKey: "autre",
+    realShipping: 0, paymentFees, netPrice: seed.netPrice, margin: seed.netPrice - paymentFees,
+  };
+}
+
+function buildManualOrdersList(
+  manualConfigs: { name: string; orderDate: string; customerName: string; netPrice: number; countryCode: string;
+    nbPots: number; nbFouets: number; nbBols: number; nbCuilleres: number;
+    giftPots: number; giftFouets: number; giftBols: number; giftCuilleres: number;
+    realShippingOverride: number | null; configured: boolean }[],
+  costs?: UnitCosts,
+): Order[] {
+  const configMap = new Map(manualConfigs.map((c) => [c.name, c]));
+  return MANUAL_SEEDS.map((seed) => {
+    const cfg = configMap.get(seed.name);
+    if (cfg?.configured) return buildConfiguredManualOrder(cfg, costs);
+    return buildUnconfiguredManualOrder(seed);
+  });
 }
 
 function mergeManualOrders(shopifyOrders: Order[], manualOrders: Order[]): Order[] {
@@ -462,8 +494,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request) as any;
   const sess = session as { shop: string; accessToken: string };
 
-  // 0. Coûts unitaires depuis les achats stock (fallback = valeurs par défaut)
-  const stockAchats = await prisma.stockAchat.findMany();
+  // 0. DB data in parallel
+  const [stockAchats, manualConfigs, rawExpenses, creators] = await Promise.all([
+    prisma.stockAchat.findMany(),
+    prisma.manualOrder.findMany(),
+    prisma.expense.findMany({ orderBy: { date: "desc" } }),
+    prisma.creator.findMany({
+      where: { shippingStatus: { not: "refuse" } },
+      select: { coutProduit: true, fraisPort: true, coutTotalCollab: true },
+    }),
+  ]);
   const unitCosts = computeUnitCostsFromStock(stockAchats);
 
   let orders: Order[] = [];
@@ -482,15 +522,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // 2. Merge manual orders (deduplicated by name)
-  orders = mergeManualOrders(orders, buildManualOrdersList(unitCosts));
-
-  const [rawExpenses, creators] = await Promise.all([
-    prisma.expense.findMany({ orderBy: { date: "desc" } }),
-    prisma.creator.findMany({
-      where: { shippingStatus: { not: "refuse" } },
-      select: { coutProduit: true, fraisPort: true, coutTotalCollab: true },
-    }),
-  ]);
+  orders = mergeManualOrders(orders, buildManualOrdersList(manualConfigs, unitCosts));
 
   const expenses: DbExpense[] = rawExpenses.map((e) => ({
     id: e.id,
@@ -535,6 +567,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "delete_expense") {
     const id = String(form.get("id") ?? "").trim();
     if (id) await prisma.expense.delete({ where: { id } });
+    return null;
+  }
+
+  if (intent === "configure_manual_order") {
+    const name         = String(form.get("name")        ?? "").trim();
+    const orderDate    = String(form.get("orderDate")   ?? "").trim();
+    const customerName = String(form.get("customerName") ?? "").trim();
+    const netPrice     = parseFloat(String(form.get("netPrice") ?? "0").replace(",", "."));
+    const countryCode  = String(form.get("countryCode") ?? "FR").trim();
+    const nbPots       = parseInt(String(form.get("nbPots")       ?? "0"), 10) || 0;
+    const nbFouets     = parseInt(String(form.get("nbFouets")     ?? "0"), 10) || 0;
+    const nbBols       = parseInt(String(form.get("nbBols")       ?? "0"), 10) || 0;
+    const nbCuilleres  = parseInt(String(form.get("nbCuilleres")  ?? "0"), 10) || 0;
+    const giftPots     = parseInt(String(form.get("giftPots")     ?? "0"), 10) || 0;
+    const giftFouets   = parseInt(String(form.get("giftFouets")   ?? "0"), 10) || 0;
+    const giftBols     = parseInt(String(form.get("giftBols")     ?? "0"), 10) || 0;
+    const giftCuilleres= parseInt(String(form.get("giftCuilleres") ?? "0"), 10) || 0;
+    const rawOverride  = String(form.get("realShippingOverride") ?? "").replace(",", ".").trim();
+    const realShippingOverride = rawOverride !== "" && !isNaN(parseFloat(rawOverride)) ? parseFloat(rawOverride) : null;
+
+    if (name) {
+      await prisma.manualOrder.upsert({
+        where: { name },
+        create: { name, orderDate, customerName, netPrice, countryCode, nbPots, nbFouets, nbBols, nbCuilleres, giftPots, giftFouets, giftBols, giftCuilleres, realShippingOverride, configured: true },
+        update: { nbPots, nbFouets, nbBols, nbCuilleres, giftPots, giftFouets, giftBols, giftCuilleres, realShippingOverride, configured: true },
+      });
+    }
     return null;
   }
 
@@ -647,10 +706,12 @@ function periodCutoff(period: string): Date | null {
 
 export default function OrdersPage() {
   const { orders, expenses, ugcStats, fetchError } = useLoaderData<typeof loader>();
-  const expenseFetcher = useFetcher();
+  const expenseFetcher  = useFetcher();
+  const configFetcher   = useFetcher();
 
-  const [search, setSearch]       = useState("");
-  const [period, setPeriod]       = useState("tout");
+  const [search, setSearch]           = useState("");
+  const [period, setPeriod]           = useState("tout");
+  const [editingOrder, setEditingOrder] = useState<string | null>(null);
   const [country, setCountry]     = useState("");
   const [finStatus, setFinStatus] = useState("");
   const [fulStatus, setFulStatus] = useState("");
@@ -836,14 +897,16 @@ export default function OrdersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {displayOrders.map((o) => {
+                  {displayOrders.flatMap((o) => {
                     const dateStr = new Date(o.createdAt).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "2-digit" });
                     const marginPct = o.netPrice > 0 ? (o.margin / o.netPrice) * 100 : 0;
-                    return (
+                    const isEditing = editingOrder === o.name;
+                    const seed = MANUAL_SEEDS.find((s) => s.name === o.name);
+                    const rows = [
                       <tr key={o.id}
-                        style={{ borderBottom: `1px solid ${T.border}` }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = T.bg; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                        style={{ borderBottom: isEditing ? "none" : `1px solid ${T.border}` }}
+                        onMouseEnter={(e) => { if (!isEditing) e.currentTarget.style.background = T.bg; }}
+                        onMouseLeave={(e) => { if (!isEditing) e.currentTarget.style.background = "transparent"; }}
                       >
                         <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>
                           <span style={{ fontWeight: 600, color: T.accent, fontSize: 13 }}>{o.name}</span>
@@ -852,13 +915,18 @@ export default function OrdersPage() {
                               manuel
                             </span>
                           )}
+                          {o.source === "manuel" && !o.configured && (
+                            <span style={{ marginLeft: 4, fontSize: 9, fontWeight: 700, padding: "2px 5px", borderRadius: 99, background: T.redBg, color: T.red, verticalAlign: "middle" }}>
+                              ⚠ à configurer
+                            </span>
+                          )}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted, whiteSpace: "nowrap" }}>{dateStr}</td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.text, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {o.customerName}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted }}>{COUNTRY_LABELS[o.countryCode] ?? (o.country || "—")}</td>
-                        <td style={{ padding: "11px 14px", fontSize: 12, color: T.text, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: "11px 14px", fontSize: 12, color: o.configured ? T.text : T.dim, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontStyle: o.configured ? "normal" : "italic" }}>
                           {o.soldLabel}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -879,14 +947,103 @@ export default function OrdersPage() {
                         <td style={{ padding: "11px 14px", fontSize: 12, color: T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
                           {eur(o.paymentFees)}
                         </td>
-                        <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: o.margin >= 0 ? T.green : T.red, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
-                          {eur(o.margin)}
+                        <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: o.configured ? (o.margin >= 0 ? T.green : T.red) : T.dim, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                          {o.configured ? eur(o.margin) : <span style={{ color: T.dim }}>—</span>}
                         </td>
                         <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 600, color: marginPct >= 50 ? T.green : marginPct >= 25 ? T.amber : T.red, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
-                          {pct(marginPct)}
+                          {o.configured ? pct(marginPct) : (
+                            o.source === "manuel"
+                              ? <button type="button" onClick={() => setEditingOrder(isEditing ? null : o.name)}
+                                  style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: `1px solid ${T.accent}`, background: T.accentBg, color: T.accent, cursor: "pointer", fontWeight: 600, fontFamily: T.font }}>
+                                  {isEditing ? "Annuler" : "Éditer"}
+                                </button>
+                              : <span style={{ color: T.dim }}>—</span>
+                          )}
                         </td>
-                      </tr>
-                    );
+                      </tr>,
+                    ];
+                    if (o.source === "manuel") {
+                      rows.push(
+                        <tr key={`${o.id}-edit-btn`} style={{ borderBottom: isEditing ? "none" : `1px solid ${T.border}` }}>
+                          <td colSpan={13} style={{ padding: isEditing ? "0 14px 4px" : "0 14px", textAlign: "right" }}>
+                            {!isEditing && o.configured && (
+                              <button type="button" onClick={() => setEditingOrder(o.name)}
+                                style={{ fontSize: 11, padding: "2px 8px", borderRadius: 5, border: `1px solid ${T.border}`, background: "none", color: T.muted, cursor: "pointer", fontFamily: T.font }}>
+                                Modifier
+                              </button>
+                            )}
+                          </td>
+                        </tr>,
+                      );
+                    }
+                    if (isEditing && o.source === "manuel" && seed) {
+                      rows.push(
+                        <tr key={`${o.id}-edit-form`} style={{ borderBottom: `1px solid ${T.border}`, background: T.bg }}>
+                          <td colSpan={13} style={{ padding: "16px 20px" }}>
+                            <configFetcher.Form method="post" onSubmit={() => setEditingOrder(null)}>
+                              <input type="hidden" name="intent" value="configure_manual_order" />
+                              <input type="hidden" name="name" value={o.name} />
+                              <input type="hidden" name="orderDate" value={seed.orderDate} />
+                              <input type="hidden" name="customerName" value={seed.customerName} />
+                              <input type="hidden" name="netPrice" value={seed.netPrice} />
+                              <input type="hidden" name="countryCode" value={seed.countryCode} />
+                              <div style={{ fontSize: 12, fontWeight: 700, color: T.text, marginBottom: 12 }}>
+                                Configurer {o.name} — {o.customerName} — {eur(o.netPrice)}
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr) repeat(4, 1fr) 1fr", gap: 10, alignItems: "end" }}>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.dim, textTransform: "uppercase" }}>Pots vendus</span>
+                                  <input name="nbPots" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%" }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.dim, textTransform: "uppercase" }}>Fouets vendus</span>
+                                  <input name="nbFouets" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%" }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.dim, textTransform: "uppercase" }}>Bols vendus</span>
+                                  <input name="nbBols" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%" }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.dim, textTransform: "uppercase" }}>Cuillères vendues</span>
+                                  <input name="nbCuilleres" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%" }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.amber, textTransform: "uppercase" }}>Pots offerts</span>
+                                  <input name="giftPots" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%", borderColor: T.amberBdr }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.amber, textTransform: "uppercase" }}>Fouets offerts</span>
+                                  <input name="giftFouets" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%", borderColor: T.amberBdr }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.amber, textTransform: "uppercase" }}>Bols offerts</span>
+                                  <input name="giftBols" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%", borderColor: T.amberBdr }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.amber, textTransform: "uppercase" }}>Cuillères offertes</span>
+                                  <input name="giftCuilleres" type="number" min="0" defaultValue={0} style={{ ...inp, width: "100%", borderColor: T.amberBdr }} />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: T.dim, textTransform: "uppercase" }}>Port réel (€)</span>
+                                  <input name="realShippingOverride" type="number" min="0" step="0.01" placeholder="auto" style={{ ...inp, width: "100%" }} />
+                                </label>
+                              </div>
+                              <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                                <button type="submit" disabled={configFetcher.state === "submitting"}
+                                  style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: T.font, opacity: configFetcher.state === "submitting" ? 0.6 : 1 }}>
+                                  {configFetcher.state === "submitting" ? "Enregistrement…" : "Enregistrer"}
+                                </button>
+                                <button type="button" onClick={() => setEditingOrder(null)}
+                                  style={{ background: "none", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 18px", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: T.font }}>
+                                  Annuler
+                                </button>
+                              </div>
+                            </configFetcher.Form>
+                          </td>
+                        </tr>,
+                      );
+                    }
+                    return rows;
                   })}
                 </tbody>
                 <tfoot>
