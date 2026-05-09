@@ -1,0 +1,19 @@
+- generic [ref=e3]:
+  - heading "A short heading about [your app]" [level=1] [ref=e4]
+  - paragraph [ref=e5]: A tagline about [your app] that describes your value proposition.
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - generic [ref=e8]: Shop domain
+      - 'textbox "Shop domain e.g: my-shop-domain.myshopify.com" [ref=e9]'
+      - generic [ref=e10]: "e.g: my-shop-domain.myshopify.com"
+    - button "Log in" [ref=e11]
+  - list [ref=e12]:
+    - listitem [ref=e13]:
+      - strong [ref=e14]: Product feature
+      - text: . Some detail about your feature and its benefit to your customer.
+    - listitem [ref=e15]:
+      - strong [ref=e16]: Product feature
+      - text: . Some detail about your feature and its benefit to your customer.
+    - listitem [ref=e17]:
+      - strong [ref=e18]: Product feature
+      - text: . Some detail about your feature and its benefit to your customer.

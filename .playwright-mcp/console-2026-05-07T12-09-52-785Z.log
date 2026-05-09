@@ -1,0 +1,5 @@
+[   22084ms] [ERROR] The Content Security Policy directive 'upgrade-insecure-requests' is ignored when delivered in a report-only policy. @ https://accounts.shopify.com/lookup?rid=d218eff2-e82a-4305-91d4-3c9a5b1fb685&verify=1778155814-9ElBDR1pzygJlCGwv7CrTsBmFokwvBBl33Z9RbngwAw%3D:0
+[   22706ms] [ERROR] The Content Security Policy directive 'upgrade-insecure-requests' is ignored when delivered in a report-only policy. @ https://hcaptcha.com/1/api.js?render=explicit&onload=simpleCaptchaReady:3
+[   22707ms] [ERROR] The Content Security Policy directive 'upgrade-insecure-requests' is ignored when delivered in a report-only policy. @ https://hcaptcha.com/1/api.js?render=explicit&onload=simpleCaptchaReady:3
+[   44837ms] [ERROR] The Content Security Policy directive 'upgrade-insecure-requests' is ignored when delivered in a report-only policy. @ https://accounts.shopify.com/login?rid=d218eff2-e82a-4305-91d4-3c9a5b1fb685:0
+[   62095ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://admin.shopify.com/store/Laya-9696/oauth/install?client_id=e293ab9a6fa9571e4382828705796c4e&country=FR:0

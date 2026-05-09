@@ -73,5 +73,8 @@
   "overrides": {
     "p-map": "^4.0.0"
   },
-  "author": "giomacbookpro"
+  "author": "giomacbookpro",
+  "prisma": {
+    "seed": "npx tsx prisma/seed.ts"
+  }
 }

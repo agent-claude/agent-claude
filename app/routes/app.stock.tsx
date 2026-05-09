@@ -325,7 +325,7 @@ export default function StockPage() {
         <div style={{ ...card, overflow: "hidden", marginBottom: 24 }}>
           <div style={{ padding: "14px 20px", borderBottom: `1px solid ${T.border}` }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Stock par composant</span>
-            <span style={{ marginLeft: 8, fontSize: 12, color: T.muted }}>consommation calculée depuis les commandes Shopify</span>
+            <span style={{ marginLeft: 8, fontSize: 12, color: T.muted }}>commandes Shopify + UGC creators + produits offerts</span>
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>

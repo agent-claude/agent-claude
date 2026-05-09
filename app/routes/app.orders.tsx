@@ -539,7 +539,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     total:    creators.reduce((s, c) => s + (c.coutTotalCollab ?? 0), 0),
   };
 
-  return { orders, expenses, ugcStats, fetchError };
+  const totalStockAchete = stockAchats.reduce((s, a) => s + a.coutTotal, 0);
+
+  return { orders, expenses, ugcStats, fetchError, totalStockAchete };
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -705,7 +707,7 @@ function periodCutoff(period: string): Date | null {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OrdersPage() {
-  const { orders, expenses, ugcStats, fetchError } = useLoaderData<typeof loader>();
+  const { orders, expenses, ugcStats, fetchError, totalStockAchete } = useLoaderData<typeof loader>();
   const expenseFetcher  = useFetcher();
   const configFetcher   = useFetcher();
 
@@ -733,19 +735,23 @@ export default function OrdersPage() {
 
   const filteredExpenses = expenses.filter((e) => !cutoff || new Date(e.date) >= cutoff);
 
-  // KPIs
-  const caBrut         = filtered.reduce((s, o) => s + o.totalPrice, 0);
-  const remboursements = filtered.reduce((s, o) => s + o.refundedTotal, 0);
-  const caNet          = filtered.reduce((s, o) => s + o.netPrice, 0);
-  const totalCogs      = filtered.reduce((s, o) => s + o.cogs, 0);
-  const totalShipping  = filtered.reduce((s, o) => s + o.realShipping, 0);
-  const totalPayFees   = filtered.reduce((s, o) => s + o.paymentFees, 0);
-  const totalManualExp = filteredExpenses.reduce((s, e) => s + e.amount, 0);
-  const totalCharges   = totalCogs + totalShipping + totalPayFees + totalManualExp;
-  const benefice       = caNet - totalCharges;
-  const margeNette     = caNet > 0 ? (benefice / caNet) * 100 : 0;
-  const panierMoyen    = filtered.length > 0 ? caNet / filtered.length : 0;
-  const nbClientes     = new Set(filtered.map((o) => o.customerEmail).filter(Boolean)).size;
+  // KPIs période
+  const caBrut            = filtered.reduce((s, o) => s + o.totalPrice, 0);
+  const remboursements    = filtered.reduce((s, o) => s + o.refundedTotal, 0);
+  const caNet             = filtered.reduce((s, o) => s + o.netPrice, 0);
+  const totalCogs         = filtered.reduce((s, o) => s + o.cogs, 0);
+  const totalShipping     = filtered.reduce((s, o) => s + o.realShipping, 0);
+  const totalPayFees      = filtered.reduce((s, o) => s + o.paymentFees, 0);
+  const totalDepensesPeriode = filteredExpenses.reduce((s, e) => s + e.amount, 0);
+  // Résultat réel = CA net - COGS consommé - port réel - frais pmt - dépenses fixes
+  const resultatReel      = caNet - totalCogs - totalShipping - totalPayFees - totalDepensesPeriode;
+  const margeNette        = caNet > 0 ? (resultatReel / caNet) * 100 : 0;
+  const panierMoyen       = filtered.length > 0 ? caNet / filtered.length : 0;
+  const nbClientes        = new Set(filtered.map((o) => o.customerEmail).filter(Boolean)).size;
+
+  // Trésorerie (all-time, indépendant du filtre période)
+  const totalExpensesAllTime  = expenses.reduce((s, e) => s + e.amount, 0);
+  const tresorerieEngagee     = totalStockAchete + totalExpensesAllTime;
 
   // Unique filter options
   const countries   = [...new Set(orders.map((o) => o.countryCode).filter(Boolean))].sort();
@@ -829,7 +835,7 @@ export default function OrdersPage() {
           </div>
         </div>
 
-        {/* ── KPI Row 1 ────────────────────────────────────────────────────── */}
+        {/* ── KPI Row 1 — Résultats période ───────────────────────────────── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 12 }}>
           <div style={{ ...card, padding: "20px 22px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: T.dim, marginBottom: 12 }}>Commandes</div>
@@ -847,30 +853,55 @@ export default function OrdersPage() {
             <div style={{ fontSize: 11, color: T.muted, marginTop: 10 }}>après remb.</div>
           </div>
           <div style={{ ...card, padding: "20px 22px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: T.dim, marginBottom: 12 }}>Charges</div>
-            <div style={{ fontSize: 26, fontWeight: 700, color: T.red, letterSpacing: "-0.02em", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{eur(totalCharges)}</div>
-            <div style={{ fontSize: 11, color: T.muted, marginTop: 10 }}>COGS + port + frais</div>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: T.dim, marginBottom: 12 }}>Charges période</div>
+            <div style={{ fontSize: 26, fontWeight: 700, color: T.red, letterSpacing: "-0.02em", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{eur(totalCogs + totalShipping + totalPayFees + totalDepensesPeriode)}</div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 10 }}>COGS consommé + port + frais</div>
           </div>
-          <div style={{ ...card, padding: "20px 22px", background: benefice >= 0 ? T.greenBg : T.redBg, border: `1px solid ${benefice >= 0 ? T.greenBdr : T.redBdr}` }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: T.dim, marginBottom: 12 }}>Bénéfice</div>
-            <div style={{ fontSize: 26, fontWeight: 700, color: benefice >= 0 ? T.green : T.red, letterSpacing: "-0.02em", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{eur(benefice)}</div>
+          <div style={{ ...card, padding: "20px 22px", background: resultatReel >= 0 ? T.greenBg : T.redBg, border: `1px solid ${resultatReel >= 0 ? T.greenBdr : T.redBdr}` }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: T.dim, marginBottom: 12 }}>Résultat réel</div>
+            <div style={{ fontSize: 26, fontWeight: 700, color: resultatReel >= 0 ? T.green : T.red, letterSpacing: "-0.02em", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{eur(resultatReel)}</div>
             <div style={{ fontSize: 11, color: T.muted, marginTop: 10 }}>marge {pct(margeNette)}</div>
           </div>
         </div>
 
-        {/* ── KPI Row 2 ────────────────────────────────────────────────────── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 32 }}>
+        {/* ── KPI Row 2 — Détail charges période ──────────────────────────── */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
           {([
-            { label: "COGS produits",      value: totalCogs,      color: T.red   },
-            { label: "Livraison réelle",   value: totalShipping,  color: T.amber },
-            { label: "Frais paiement",     value: totalPayFees,   color: T.muted },
-            { label: "Dépenses manuelles", value: totalManualExp, color: T.red   },
-          ] as const).map(({ label, value, color }) => (
+            { label: "COGS consommé",         value: totalCogs,             color: T.red,   note: "stock vendu + offert" },
+            { label: "Livraison réelle",       value: totalShipping,         color: T.amber, note: "estimé par compos." },
+            { label: "Frais paiement",         value: totalPayFees,          color: T.muted, note: "1,5 % du CA net" },
+            { label: "Dépenses fixes (pér.)",  value: totalDepensesPeriode,  color: T.red,   note: "pub, abonnements…" },
+          ] as const).map(({ label, value, color, note }) => (
             <div key={label} style={{ ...card, padding: "14px 18px", borderRadius: 12 }}>
-              <div style={{ fontSize: 11, color: T.dim, marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 11, color: T.dim, marginBottom: 4 }}>{label}</div>
               <div style={{ fontSize: 19, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{eur(value)}</div>
+              <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>{note}</div>
             </div>
           ))}
+        </div>
+
+        {/* ── KPI Row 3 — Trésorerie engagée (all-time) ───────────────────── */}
+        <div style={{ ...card, padding: "16px 20px", marginBottom: 32, borderRadius: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: T.dim, marginBottom: 12 }}>
+            Trésorerie engagée (all-time) — cash sorti, indépendant du filtre période
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 11, color: T.dim, marginBottom: 4 }}>Marchandise achetée</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totalStockAchete)}</div>
+              <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>stock physique (pots, bols, fouets, cuillères)</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: T.dim, marginBottom: 4 }}>Dépenses fixes totales</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totalExpensesAllTime)}</div>
+              <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>pub, logiciels, livraisons…</div>
+            </div>
+            <div style={{ background: T.amberBg, border: `1px solid ${T.amberBdr}`, borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ fontSize: 11, color: T.amber, marginBottom: 4, fontWeight: 600 }}>Trésorerie engagée</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: T.amber, fontVariantNumeric: "tabular-nums" }}>{eur(tresorerieEngagee)}</div>
+              <div style={{ fontSize: 10, color: T.amber, marginTop: 2, opacity: 0.8 }}>marchandise + dépenses fixes</div>
+            </div>
+          </div>
         </div>
 
         {/* ── Orders table ─────────────────────────────────────────────────── */}
@@ -1056,7 +1087,7 @@ export default function OrdersPage() {
                     <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.amber, fontVariantNumeric: "tabular-nums" }}>{eur(filtered.reduce((s, o) => s + o.cogsGift, 0))}</td>
                     <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.amber, fontVariantNumeric: "tabular-nums" }}>{eur(totalShipping)}</td>
                     <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: T.muted, fontVariantNumeric: "tabular-nums" }}>{eur(totalPayFees)}</td>
-                    <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: benefice >= 0 ? T.green : T.red, fontVariantNumeric: "tabular-nums" }}>{eur(filtered.reduce((s, o) => s + o.margin, 0))}</td>
+                    <td style={{ padding: "11px 14px", fontSize: 13, fontWeight: 700, color: resultatReel >= 0 ? T.green : T.red, fontVariantNumeric: "tabular-nums" }}>{eur(filtered.reduce((s, o) => s + o.margin, 0))}</td>
                     <td style={{ padding: "11px 14px", fontSize: 12, fontWeight: 700, color: margeNette >= 50 ? T.green : margeNette >= 25 ? T.amber : T.red, fontVariantNumeric: "tabular-nums" }}>{pct(margeNette)}</td>
                   </tr>
                 </tfoot>
@@ -1199,7 +1230,7 @@ export default function OrdersPage() {
                 ))}
                 <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 9, marginTop: 2, display: "flex", justifyContent: "space-between" }}>
                   <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>Total</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totalManualExp)}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: T.red, fontVariantNumeric: "tabular-nums" }}>{eur(totalDepensesPeriode)}</span>
                 </div>
               </div>
             )}

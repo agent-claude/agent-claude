@@ -1,0 +1,2 @@
+[     372ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://admin.myshopify.com/store/Laya-9696/oauth/install?client_id=e293ab9a6fa9571e4382828705796c4e&country=FR:0
+[    1063ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://admin.myshopify.com/favicon.ico:0
