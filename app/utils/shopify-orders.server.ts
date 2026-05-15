@@ -16,7 +16,7 @@ const SHIPPING_ORDERS_QUERY = `
           createdAt
           displayFulfillmentStatus
           customer { firstName lastName email }
-          shippingAddress { country countryCodeV2 }
+          shippingAddress { country countryCodeV2 zip }
           lineItems(first: 20) {
             edges {
               node {
@@ -41,7 +41,7 @@ type RawNode = {
   createdAt: string;
   displayFulfillmentStatus?: string | null;
   customer?: { firstName?: string | null; lastName?: string | null; email?: string | null } | null;
-  shippingAddress?: { country?: string | null; countryCodeV2?: string | null } | null;
+  shippingAddress?: { country?: string | null; countryCodeV2?: string | null; zip?: string | null } | null;
   lineItems?: {
     edges: {
       node: {
@@ -95,6 +95,7 @@ export async function fetchShippingOrders(admin: AdminClient, limit = 50): Promi
     const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(" ").trim() || "—";
     const customerEmail = customer.email ?? "";
     const country = node.shippingAddress?.country ?? node.shippingAddress?.countryCodeV2 ?? "";
+    const postalCode = node.shippingAddress?.zip ?? null;
     const productsSummary = buildProductsSummary(node);
 
     const tracking = pickFirstTracking(node);
@@ -106,6 +107,7 @@ export async function fetchShippingOrders(admin: AdminClient, limit = 50): Promi
       customerEmail,
       customerName,
       country,
+      postalCode,
       productsSummary,
       fulfillmentStatus: node.displayFulfillmentStatus ?? "UNFULFILLED",
       carrier,

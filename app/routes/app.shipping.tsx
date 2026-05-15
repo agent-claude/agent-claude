@@ -9,10 +9,14 @@ import {
   saveTracking,
   markConfirmationReady,
   markShippingReady,
+  markEmailSent,
+  getOrderEmailLog,
   resetEmailStatus,
   updateNotes,
+  ShippingReadyError,
   type OrderSnapshot,
 } from "../utils/shipping-store";
+import { sendTransactionalEmail } from "../utils/klaviyo.server";
 import {
   getDemoSnapshots,
   isDemoModeForced,
@@ -64,26 +68,51 @@ const T = {
   shadowLg: "0 18px 48px rgba(31,20,36,0.20), 0 4px 12px rgba(31,20,36,0.08)",
 };
 
+// Keys cover French + English + native names + ISO 3166-1 alpha-2 codes.
+// Shopify's `shippingAddress.country` is locale-dependent (FR/EN/native), and
+// `countryCodeV2` is the 2-letter fallback. flagFor() normalizes both.
 const FLAGS: Record<string, string> = {
-  France: "🇫🇷",
-  Belgique: "🇧🇪",
-  Allemagne: "🇩🇪",
-  Suisse: "🇨🇭",
-  Espagne: "🇪🇸",
-  Portugal: "🇵🇹",
-  Italie: "🇮🇹",
-  "Pays-Bas": "🇳🇱",
-  Luxembourg: "🇱🇺",
-  Autriche: "🇦🇹",
-  Irlande: "🇮🇪",
-  "Royaume-Uni": "🇬🇧",
-  Canada: "🇨🇦",
-  "États-Unis": "🇺🇸",
+  // France
+  France: "🇫🇷", FR: "🇫🇷",
+  // Belgique
+  Belgique: "🇧🇪", Belgium: "🇧🇪", "België": "🇧🇪", BE: "🇧🇪",
+  // Allemagne
+  Allemagne: "🇩🇪", Germany: "🇩🇪", Deutschland: "🇩🇪", DE: "🇩🇪",
+  // Suisse
+  Suisse: "🇨🇭", Switzerland: "🇨🇭", Schweiz: "🇨🇭", Svizzera: "🇨🇭", CH: "🇨🇭",
+  // Espagne
+  Espagne: "🇪🇸", Spain: "🇪🇸", "España": "🇪🇸", ES: "🇪🇸",
+  // Portugal
+  Portugal: "🇵🇹", PT: "🇵🇹",
+  // Italie
+  Italie: "🇮🇹", Italy: "🇮🇹", Italia: "🇮🇹", IT: "🇮🇹",
+  // Bonus EU
+  "Pays-Bas": "🇳🇱", Netherlands: "🇳🇱", Nederland: "🇳🇱", NL: "🇳🇱",
+  Luxembourg: "🇱🇺", LU: "🇱🇺",
+  Autriche: "🇦🇹", Austria: "🇦🇹", "Österreich": "🇦🇹", AT: "🇦🇹",
+  Irlande: "🇮🇪", Ireland: "🇮🇪", IE: "🇮🇪",
+  "Royaume-Uni": "🇬🇧", "United Kingdom": "🇬🇧", UK: "🇬🇧", GB: "🇬🇧",
+  // Bonus hors EU
+  Canada: "🇨🇦", CA: "🇨🇦",
+  "États-Unis": "🇺🇸", "United States": "🇺🇸", USA: "🇺🇸", US: "🇺🇸",
 };
 
 function flagFor(country: string | null | undefined): string {
   if (!country) return "🌍";
-  return FLAGS[country] ?? "🌍";
+  const trimmed = country.trim();
+  if (!trimmed) return "🌍";
+  if (FLAGS[trimmed]) return FLAGS[trimmed];
+  // ISO codes are uppercase in Shopify, but be defensive.
+  if (trimmed.length === 2) {
+    const upper = trimmed.toUpperCase();
+    if (FLAGS[upper]) return FLAGS[upper];
+  }
+  // Case-insensitive last-resort lookup for odd casing from APIs.
+  const lower = trimmed.toLowerCase();
+  for (const key of Object.keys(FLAGS)) {
+    if (key.toLowerCase() === lower) return FLAGS[key];
+  }
+  return "🌍";
 }
 
 type SerializedLog = Omit<OrderEmailLog, "confirmationReadyAt" | "shippingReadyAt" | "confirmationEmailSentAt" | "shippingEmailSentAt" | "createdAt" | "updatedAt"> & {
@@ -127,7 +156,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ? allLogs.filter((l) => isDemoOrderId(l.shopifyOrderId))
     : allLogs.filter((l) => !isDemoOrderId(l.shopifyOrderId));
 
-  return { logs, isDemo };
+  const dryRun = process.env.KLAVIYO_DRY_RUN !== "false";
+  return { logs, isDemo, dryRun };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -149,8 +179,29 @@ export async function action({ request }: ActionFunctionArgs) {
       await markConfirmationReady(id);
       return { ok: true };
     case "mark_shipping_ready":
-      await markShippingReady(id);
-      return { ok: true };
+      try {
+        await markShippingReady(id);
+        return { ok: true };
+      } catch (err) {
+        if (err instanceof ShippingReadyError) {
+          return { ok: false, error: err.message, intent: "mark_shipping_ready" };
+        }
+        throw err;
+      }
+    case "send_confirmation":
+    case "send_shipping": {
+      const side = intent === "send_confirmation" ? "confirmation" : "shipping";
+      const log = await getOrderEmailLog(id);
+      if (!log) return { ok: false, error: "Commande introuvable", intent };
+      try {
+        await sendTransactionalEmail(log, side);
+        await markEmailSent(id, side);
+        return { ok: true, intent, dry: true };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: message, intent };
+      }
+    }
     case "reset":
       await resetEmailStatus(id);
       return { ok: true };
@@ -215,7 +266,7 @@ function fmtDateTime(iso: string | null): string {
 }
 
 export default function ShippingPage() {
-  const { logs, isDemo } = useLoaderData<typeof loader>() as unknown as { logs: SerializedLog[]; isDemo: boolean };
+  const { logs, isDemo, dryRun } = useLoaderData<typeof loader>() as unknown as { logs: SerializedLog[]; isDemo: boolean; dryRun: boolean };
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -298,6 +349,28 @@ export default function ShippingPage() {
               >
                 <span style={{ width: 6, height: 6, borderRadius: 999, background: T.amber }} />
                 Démo
+              </span>
+            )}
+            {dryRun && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: T.redBg,
+                  color: T.red,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  border: `1px solid ${T.redBorder}`,
+                }}
+                title="KLAVIYO_DRY_RUN=true — aucun email ne sera envoyé"
+              >
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: T.red }} />
+                Mode simulation actif
               </span>
             )}
           </div>
@@ -694,6 +767,11 @@ function DetailModal({ log, onClose }: { log: SerializedLog; onClose: () => void
   const confStatus = emailDisplayStatus("confirmation", log);
   const shipStatus = emailDisplayStatus("shipping", log);
 
+  const response = fetcher.data as { ok?: boolean; error?: string; intent?: string; dry?: boolean } | undefined;
+  const serverError = response && response.ok === false ? response.error : undefined;
+  const serverErrorIntent = response && response.ok === false ? response.intent : undefined;
+  const serverSuccess = response?.ok === true ? response.intent : undefined;
+
   const copyTracking = () => {
     if (!trackingNumber.trim()) return;
     if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -917,8 +995,25 @@ function DetailModal({ log, onClose }: { log: SerializedLog; onClose: () => void
                     Marquer comme prêt
                   </button>
                 </fetcher.Form>
+                <fetcher.Form method="post" style={{ display: "inline" }}>
+                  <input type="hidden" name="intent" value="send_confirmation" />
+                  <input type="hidden" name="id" value={log.id} />
+                  <button type="submit" disabled={busy || !log.confirmationReadyAt} style={primaryBtn}>
+                    Envoyer confirmation
+                  </button>
+                </fetcher.Form>
               </ButtonRow>
             </Row>
+            {serverSuccess === "send_confirmation" && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: T.greenBg, border: `1px solid ${T.greenBorder}`, borderRadius: 8, color: T.green, fontSize: 12, fontWeight: 600 }}>
+                ✓ Email simulé (DRY_RUN) — aucun envoi réel
+              </div>
+            )}
+            {serverErrorIntent === "send_confirmation" && serverError && (
+              <div role="alert" style={{ marginTop: 10, padding: "8px 12px", background: T.redBg, border: `1px solid ${T.redBorder}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600 }}>
+                ⚠ {serverError}
+              </div>
+            )}
           </Section>
 
           <Section title="Email d'expédition">
@@ -953,8 +1048,46 @@ function DetailModal({ log, onClose }: { log: SerializedLog; onClose: () => void
                     Marquer comme prêt
                   </button>
                 </fetcher.Form>
+                <fetcher.Form method="post" style={{ display: "inline" }}>
+                  <input type="hidden" name="intent" value="send_shipping" />
+                  <input type="hidden" name="id" value={log.id} />
+                  <button type="submit" disabled={busy || !log.shippingReadyAt} style={primaryBtn}>
+                    Envoyer expédition
+                  </button>
+                </fetcher.Form>
               </ButtonRow>
             </Row>
+            {serverSuccess === "send_shipping" && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: T.greenBg, border: `1px solid ${T.greenBorder}`, borderRadius: 8, color: T.green, fontSize: 12, fontWeight: 600 }}>
+                ✓ Email simulé (DRY_RUN) — aucun envoi réel
+              </div>
+            )}
+            {serverErrorIntent === "send_shipping" && serverError && (
+              <div role="alert" style={{ marginTop: 10, padding: "8px 12px", background: T.redBg, border: `1px solid ${T.redBorder}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600 }}>
+                ⚠ {serverError}
+              </div>
+            )}
+            {serverErrorIntent === "mark_shipping_ready" && serverError && (
+              <div
+                role="alert"
+                style={{
+                  marginTop: 10,
+                  padding: "10px 12px",
+                  background: T.redBg,
+                  border: `1px solid ${T.redBorder}`,
+                  borderRadius: 8,
+                  color: T.red,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span aria-hidden>⚠</span>
+                <span>{serverError}</span>
+              </div>
+            )}
           </Section>
 
           <Section title="Notes internes">

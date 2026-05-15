@@ -9,6 +9,7 @@ import {
   markShippingReady,
   resetEmailStatus,
   updateNotes,
+  ShippingReadyError,
 } from "../utils/shipping-store";
 import { getDemoSnapshots, isDemoOrderId } from "../utils/demo-shipping";
 import {
@@ -59,26 +60,49 @@ const T = {
   shadowLg: "0 18px 48px rgba(31,20,36,0.20), 0 4px 12px rgba(31,20,36,0.08)",
 };
 
+// Keys cover French + English + native names + ISO 3166-1 alpha-2 codes.
+// Shopify's `shippingAddress.country` is locale-dependent (FR/EN/native), and
+// `countryCodeV2` is the 2-letter fallback. flagFor() normalizes both.
 const FLAGS: Record<string, string> = {
-  France: "🇫🇷",
-  Belgique: "🇧🇪",
-  Allemagne: "🇩🇪",
-  Suisse: "🇨🇭",
-  Espagne: "🇪🇸",
-  Portugal: "🇵🇹",
-  Italie: "🇮🇹",
-  "Pays-Bas": "🇳🇱",
-  Luxembourg: "🇱🇺",
-  Autriche: "🇦🇹",
-  Irlande: "🇮🇪",
-  "Royaume-Uni": "🇬🇧",
-  Canada: "🇨🇦",
-  "États-Unis": "🇺🇸",
+  // France
+  France: "🇫🇷", FR: "🇫🇷",
+  // Belgique
+  Belgique: "🇧🇪", Belgium: "🇧🇪", "België": "🇧🇪", BE: "🇧🇪",
+  // Allemagne
+  Allemagne: "🇩🇪", Germany: "🇩🇪", Deutschland: "🇩🇪", DE: "🇩🇪",
+  // Suisse
+  Suisse: "🇨🇭", Switzerland: "🇨🇭", Schweiz: "🇨🇭", Svizzera: "🇨🇭", CH: "🇨🇭",
+  // Espagne
+  Espagne: "🇪🇸", Spain: "🇪🇸", "España": "🇪🇸", ES: "🇪🇸",
+  // Portugal
+  Portugal: "🇵🇹", PT: "🇵🇹",
+  // Italie
+  Italie: "🇮🇹", Italy: "🇮🇹", Italia: "🇮🇹", IT: "🇮🇹",
+  // Bonus EU
+  "Pays-Bas": "🇳🇱", Netherlands: "🇳🇱", Nederland: "🇳🇱", NL: "🇳🇱",
+  Luxembourg: "🇱🇺", LU: "🇱🇺",
+  Autriche: "🇦🇹", Austria: "🇦🇹", "Österreich": "🇦🇹", AT: "🇦🇹",
+  Irlande: "🇮🇪", Ireland: "🇮🇪", IE: "🇮🇪",
+  "Royaume-Uni": "🇬🇧", "United Kingdom": "🇬🇧", UK: "🇬🇧", GB: "🇬🇧",
+  // Bonus hors EU
+  Canada: "🇨🇦", CA: "🇨🇦",
+  "États-Unis": "🇺🇸", "United States": "🇺🇸", USA: "🇺🇸", US: "🇺🇸",
 };
 
 function flagFor(country: string | null | undefined): string {
   if (!country) return "🌍";
-  return FLAGS[country] ?? "🌍";
+  const trimmed = country.trim();
+  if (!trimmed) return "🌍";
+  if (FLAGS[trimmed]) return FLAGS[trimmed];
+  if (trimmed.length === 2) {
+    const upper = trimmed.toUpperCase();
+    if (FLAGS[upper]) return FLAGS[upper];
+  }
+  const lower = trimmed.toLowerCase();
+  for (const key of Object.keys(FLAGS)) {
+    if (key.toLowerCase() === lower) return FLAGS[key];
+  }
+  return "🌍";
 }
 
 type SerializedLog = Omit<OrderEmailLog, "confirmationReadyAt" | "shippingReadyAt" | "confirmationEmailSentAt" | "shippingEmailSentAt" | "createdAt" | "updatedAt"> & {
@@ -121,8 +145,15 @@ export async function action({ request }: ActionFunctionArgs) {
       await markConfirmationReady(id);
       return { ok: true };
     case "mark_shipping_ready":
-      await markShippingReady(id);
-      return { ok: true };
+      try {
+        await markShippingReady(id);
+        return { ok: true };
+      } catch (err) {
+        if (err instanceof ShippingReadyError) {
+          return { ok: false, error: err.message, intent: "mark_shipping_ready" };
+        }
+        throw err;
+      }
     case "reset":
       await resetEmailStatus(id);
       return { ok: true };
@@ -684,6 +715,10 @@ function DetailModal({ log, onClose }: { log: SerializedLog; onClose: () => void
   const confStatus = emailDisplayStatus("confirmation", log);
   const shipStatus = emailDisplayStatus("shipping", log);
 
+  const response = fetcher.data as { ok?: boolean; error?: string; intent?: string } | undefined;
+  const serverError = response && response.ok === false ? response.error : undefined;
+  const serverErrorIntent = response && response.ok === false ? response.intent : undefined;
+
   const copyTracking = () => {
     if (!trackingNumber.trim()) return;
     if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -945,6 +980,27 @@ function DetailModal({ log, onClose }: { log: SerializedLog; onClose: () => void
                 </fetcher.Form>
               </ButtonRow>
             </Row>
+            {serverErrorIntent === "mark_shipping_ready" && serverError && (
+              <div
+                role="alert"
+                style={{
+                  marginTop: 10,
+                  padding: "10px 12px",
+                  background: T.redBg,
+                  border: `1px solid ${T.redBorder}`,
+                  borderRadius: 8,
+                  color: T.red,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span aria-hidden>⚠</span>
+                <span>{serverError}</span>
+              </div>
+            )}
           </Section>
 
           <Section title="Notes internes">

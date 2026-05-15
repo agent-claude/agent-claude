@@ -222,6 +222,7 @@ model OrderEmailLog {
   customerEmail            String
   customerName             String
   country                  String
+  postalCode               String?
   productsSummary          String
   fulfillmentStatus        String    @default("UNFULFILLED")
   carrier                  String?
