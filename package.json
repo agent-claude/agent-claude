@@ -5,6 +5,7 @@
   "scripts": {
     "build": "react-router build",
     "dev": "shopify app dev",
+    "dev:local": "DEMO_SHIPPING=true vite dev",
     "dev:clean": "shopify app dev clean && shopify app dev",
     "dev:fresh": "rm -rf .shopify && shopify app dev",
     "dev:reset": "rm -rf .shopify && rm -rf node_modules/.cache && shopify app dev",

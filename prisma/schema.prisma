@@ -214,3 +214,29 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model OrderEmailLog {
+  id                       String    @id @default(cuid())
+  shopifyOrderId           String    @unique
+  orderName                String
+  customerEmail            String
+  customerName             String
+  country                  String
+  productsSummary          String
+  fulfillmentStatus        String    @default("UNFULFILLED")
+  carrier                  String?
+  trackingNumber           String?
+  trackingUrl              String?
+  confirmationReadyAt      DateTime?
+  shippingReadyAt          DateTime?
+  confirmationEmailSentAt  DateTime?
+  shippingEmailSentAt      DateTime?
+  emailStatus              String    @default("pending")
+  lastEmailError           String?
+  notes                    String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([emailStatus])
+  @@index([carrier])
+}

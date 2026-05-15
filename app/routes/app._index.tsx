@@ -71,6 +71,15 @@ const SECTIONS = [
     bg: T.orangeBg,
     bdr: "#fde68a",
   },
+  {
+    href: "/app/shipping",
+    label: "Expédition & Emails",
+    desc: "Tracking · Emails · Suivi colis",
+    icon: "📦",
+    accent: "#0891b2",
+    bg: "#ecfeff",
+    bdr: "#a5f3fc",
+  },
 ];
 
 export default function Dashboard() {
@@ -85,6 +94,23 @@ export default function Dashboard() {
       }}
     >
       <div style={{ maxWidth: 800, margin: "0 auto" }}>
+
+        <div
+          style={{
+            marginBottom: 20,
+            padding: "10px 14px",
+            background: "#fef3c7",
+            border: "1px solid #f59e0b",
+            borderRadius: 8,
+            color: "#92400e",
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          VERSION LOCALE TEST SHIPPING 15 MAI
+        </div>
 
         <div style={{ marginBottom: 36 }}>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: T.text, letterSpacing: "-0.02em" }}>
